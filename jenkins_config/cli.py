@@ -167,12 +167,36 @@ def main():
     
     # ------------------------------------------------------------------------
     # 确定配置文件路径
-    # 相对路径会相对于脚本所在目录解析
+    # 
+    # 在不同运行环境下处理配置文件路径：
+    # 1. 源码运行：相对于项目根目录
+    # 2. exe 运行：相对于 exe 所在目录或当前工作目录
     # ------------------------------------------------------------------------
-    script_dir = Path(__file__).parent.parent
     config_file = Path(args.config)
+    
     if not config_file.is_absolute():
-        config_file = script_dir / args.config
+        # 检查是否在 PyInstaller 打包环境中运行
+        # getattr(sys, 'frozen', False) 在 exe 模式下返回 True
+        if getattr(sys, 'frozen', False):
+            # exe 模式：优先使用当前工作目录，然后是 exe 所在目录
+            exe_dir = Path(sys.executable).parent
+            
+            # 1. 先检查当前工作目录
+            cwd_config = Path.cwd() / args.config
+            if cwd_config.exists():
+                config_file = cwd_config
+            # 2. 再检查 exe 所在目录
+            else:
+                exe_config = exe_dir / args.config
+                if exe_config.exists():
+                    config_file = exe_config
+                else:
+                    # 都不存在，默认使用当前工作目录（会在后续报错）
+                    config_file = cwd_config
+        else:
+            # 源码模式：相对于项目根目录
+            script_dir = Path(__file__).parent.parent
+            config_file = script_dir / args.config
     
     # ------------------------------------------------------------------------
     # 根据参数调用相应的功能
