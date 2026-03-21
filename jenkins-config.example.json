@@ -1,0 +1,66 @@
+{
+  "server": {
+    "url": "http://xxxx",
+    "token": "xxx"
+  },
+  "build": {
+    "mode": "parallel",
+    "poll_interval": 10,
+    "build_timeout": 3600,
+    "curl_timeout": 30,
+    "log_dir": "./jenkins_logs"
+  },
+  "environments": {
+    "dev": {
+      "default_branch": "develop",
+      "params": "skip_tests=false&hot_reload=true",
+      "projects": [
+        {
+          "name": "pms-biz-plan-web",
+          "branch": "develop",
+          "params": "skip_tests=false"
+        },
+        {
+          "name": "pms-order-web",
+          "branch": "develop",
+          "params": "skip_tests=false&optimize=true"
+        },
+        {
+          "name": "pms-user-web",
+          "branch": "feature/new-ui",
+          "params": "skip_tests=false"
+        }
+      ]
+    },
+    "test": {
+      "default_branch": "test",
+      "params": "skip_tests=true&notify=false",
+      "projects": [
+        {
+          "name": "pms-biz-plan-web-test",
+          "branch": "test"
+        },
+        {
+          "name": "pms-order-web-test",
+          "branch": "test"
+        }
+      ]
+    },
+    "prod": {
+      "default_branch": "main",
+      "params": "skip_tests=false&notify=true&approval_required=true",
+      "projects": [
+        {
+          "name": "pms-biz-plan-web-prod",
+          "branch": "main",
+          "params": "skip_tests=false&notify=true"
+        },
+        {
+          "name": "pms-order-web-prod",
+          "branch": "main",
+          "params": "skip_tests=false&notify=true"
+        }
+      ]
+    }
+  }
+}
