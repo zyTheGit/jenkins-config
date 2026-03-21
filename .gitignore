@@ -41,3 +41,7 @@ jenkins_logs/
 data/*.json
 
 jenkins-config.json
+
+# PyInstaller
+*.spec
+!jenkins-build.spec
