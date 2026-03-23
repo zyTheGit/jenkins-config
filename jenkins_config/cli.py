@@ -122,6 +122,11 @@ def main():
         action="store_true",
         help="交互式选择要构建的项目"
     )
+    parser.add_argument(
+        "-y", "--yes",
+        action="store_true",
+        help="跳过确认直接执行构建"
+    )
     
     # ------------------------------------------------------------------------
     # 列表命令
@@ -622,14 +627,31 @@ def run_build(config_file: Path, args):
         log_error("没有找到匹配的项目")
         sys.exit(1)
     
-    # 显示将要构建的项目
+    # ------------------------------------------------------------------------
+    # 显示将要构建的项目并确认
+    # ------------------------------------------------------------------------
     print_sep("-")
-    print("将要构建的 Job:")
+    print(f"将要构建的 Job (共 {len(jobs)} 个):")
     print_sep("-")
     for job in jobs:
-        print(f"  - {job.key}: {job.path}")
+        print(f"  - [{job.env}] {job.key}: {job.path} (分支: {job.branch})")
     print_sep("-")
     print()
+    
+    # 如果没有指定 --yes 参数，需要确认
+    if not getattr(args, 'yes', False):
+        try:
+            # 使用简单的 input 而不是 questionary，更可靠
+            print("是否确认开始构建? [Y/n]: ", end="", flush=True)
+            response = input().strip().lower()
+            
+            if response not in ('', 'y', 'yes'):
+                log_warn("已取消构建")
+                sys.exit(0)
+        except (KeyboardInterrupt, EOFError):
+            print("\n")
+            log_warn("已取消构建")
+            sys.exit(130)
     
     # ------------------------------------------------------------------------
     # 创建日志目录
