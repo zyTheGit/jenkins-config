@@ -1,142 +1,308 @@
-# Jenkins 配置文件说明
+# Jenkins 自动构建工具
 
-## 概述
-本目录包含 Jenkins 自动构建脚本的所有文件，包括配置文件、解析器和主脚本。
+将 Shell 脚本重构为模块化 Python 项目，移除外部依赖（curl、jq、node），添加历史记录功能和交互式选择界面。
 
-## 文件说明
+## 功能特性
 
-### 配置文件
-- `jenkins-config.json` - 配置文件模板（需修改 token）
-- `jenkins-config.example.json` - 完整示例配置
+- **并行/顺序构建** - 支持同时构建多个项目或按顺序逐个构建
+- **交互式选择** - 终端界面选择要构建的环境和项目
+- **构建历史** - 自动记录构建结果，支持查看统计
+- **独立 EXE** - 可打包成单个可执行文件，无需安装 Python
 
-### 脚本文件
-- `load-config.py` - Python 配置解析器
-- `jenkins-auto-build.sh` - 主构建脚本
+## 快速开始
+
+### 方式一：使用 Shell 脚本（需要 Python）
+
+```bash
+# 克隆项目
+git clone <repo-url>
+cd jenkins-config
+
+# 安装依赖
+uv sync
+
+# 运行
+./jenkins-auto-build.sh --help
+```
+
+### 方式二：使用 EXE（无需 Python）
+
+```bash
+# 直接下载 dist/jenkins-build.exe
+# 将 jenkins-config.json 放在 exe 同级目录
+
+jenkins-build.exe --help
+```
+
+## 安装
+
+### 前置要求
+
+- Python 3.10+
+- [uv](https://docs.astral.sh/uv/) 包管理器
+
+### 安装依赖
+
+```bash
+uv sync
+```
 
 ## 使用方法
 
-### 基本使用
-```bash
-cd jenkins-config
-./jenkins-auto-build.sh --config jenkins-config.json --env dev
-```
+### 基本命令
 
-### 列出环境
 ```bash
+# 显示帮助
+./jenkins-auto-build.sh --help
+
+# 列出所有环境
 ./jenkins-auto-build.sh --list-envs
-```
 
-### 列出项目
-```bash
+# 列出项目
 ./jenkins-auto-build.sh --list-projects dev
+
+# 交互式选择（推荐）
+./jenkins-auto-build.sh -i
+
+# 构建指定环境
+./jenkins-auto-build.sh -e dev
+
+# 构建指定项目
+./jenkins-auto-build.sh -j dev:project-a,test:project-b
+
+# 查看构建历史
+./jenkins-auto-build.sh --history
+./jenkins-auto-build.sh --history-stats
 ```
 
-### 构建特定项目
+### 交互式模式
+
 ```bash
-# 新格式（推荐）
-./jenkins-auto-build.sh --jobs dev:pms-biz-plan-web,dev:pms-order-web
-
-# 旧格式（兼容）
-./jenkins-auto-build.sh --jobs dev,test
+./jenkins-auto-build.sh -i
 ```
 
-## 配置格式
+交互流程：
+1. 选择构建方式（按环境/按项目）
+2. 选择要构建的项目（支持多选）
+3. 选择构建模式（并行/顺序）
+4. 确认后开始构建
 
-### 服务器配置
+## 打包成 EXE
+
+### 安装打包工具
+
+```bash
+uv pip install pyinstaller
+```
+
+### 打包命令
+
+```bash
+# 单文件模式（默认，便于分发，约 14 MB）
+uv run python build.py
+
+# 目录模式（启动更快，文件较多）
+uv run python build.py --dir
+
+# 清理后重新打包
+uv run python build.py --clean
+```
+
+### 打包输出
+
+```
+dist/
+└── jenkins-build.exe  # 单文件模式
+# 或
+dist/
+└── jenkins-build/     # 目录模式
+    └── jenkins-build.exe
+```
+
+### EXE 使用说明
+
+1. 将 `jenkins-config.json` 放在 exe 同级目录
+2. 或使用 `-c` 参数指定配置文件路径
+
+```bash
+# 配置文件在同级目录
+jenkins-build.exe --list-envs
+
+# 指定配置文件路径
+jenkins-build.exe -c /path/to/config.json --list-envs
+```
+
+## 项目结构
+
+```
+jenkins-config/
+├── jenkins-auto-build.sh       # Shell 入口（Python 包装器）
+├── pyproject.toml              # Python 项目配置
+├── jenkins-config.json         # 配置文件
+├── jenkins-config.example.json # 配置示例
+├── build.py                    # PyInstaller 打包脚本
+├── entry_point.py              # EXE 入口点
+├── jenkins_config/             # Python 包
+│   ├── __init__.py
+│   ├── cli.py                  # CLI 入口
+│   ├── config.py               # 配置加载
+│   ├── jenkins.py              # Jenkins API 客户端
+│   ├── builder.py              # 构建编排
+│   ├── history.py              # 历史记录
+│   └── utils.py                # 工具函数
+├── tests/                      # 测试套件
+│   ├── test_config.py
+│   ├── test_jenkins.py
+│   ├── test_builder.py
+│   ├── test_history.py
+│   └── test_utils.py
+├── data/                       # 数据目录
+│   └── build_history.json      # 构建历史
+└── dist/                       # 打包输出
+    └── jenkins-build.exe
+```
+
+## 配置文件格式
+
+### 完整示例
+
 ```json
 {
   "server": {
-    "url": "http://your-jenkins-server:8080",
-    "token": "your-jenkins-token"
-  }
-}
-```
-
-### 构建配置
-```json
-{
+    "url": "http://jenkins.example.com:8080",
+    "token": "your-api-token"
+  },
   "build": {
     "mode": "parallel",
     "poll_interval": 10,
     "build_timeout": 3600,
     "curl_timeout": 30,
     "log_dir": "./jenkins_logs"
-  }
-}
-```
-
-### 环境和项目配置
-```json
-{
+  },
   "environments": {
     "dev": {
       "default_branch": "develop",
       "params": "skip_tests=false",
       "projects": [
         {
-          "name": "pms-biz-plan-web",
-          "branch": "develop",
-          "params": "skip_tests=false"
+          "name": "project-a",
+          "path": "folder/project-a",
+          "branch": "feature",
+          "params": "debug=true"
+        },
+        {
+          "name": "project-b"
         }
+      ]
+    },
+    "test": {
+      "default_branch": "main",
+      "projects": [
+        { "name": "project-a" },
+        { "name": "project-b" }
       ]
     }
   }
 }
 ```
 
-## Job Key 格式
+### 配置说明
 
-### 新格式（推荐）
-- 格式：`env:project`
-- 示例：`dev:pms-biz-plan-web`
-- 支持多个：`dev:pms-biz-plan-web,dev:pms-order-web`
+| 字段 | 说明 | 默认值 |
+|------|------|--------|
+| `server.url` | Jenkins 服务器地址 | 必填 |
+| `server.token` | API Token | 必填 |
+| `build.mode` | 构建模式：parallel/sequential | parallel |
+| `build.poll_interval` | 轮询间隔（秒） | 10 |
+| `build.build_timeout` | 构建超时（秒） | 3600 |
+| `build.log_dir` | 日志目录 | ./jenkins_logs |
+| `environments.*.default_branch` | 默认分支 | main |
+| `environments.*.params` | 环境参数 | - |
 
-### 旧格式（兼容）
-- 格式：`env`
-- 示例：`dev,test`
-- 仍然可用，但功能有限
+### 参数合并优先级
 
-## 参数合并规则
-
-参数合并优先级（高到低）：
 1. 命令行参数（`--params`）
-2. 项目特定参数（`projects[].params`）
-3. 环境默认参数（`environments.xxx.params`）
-4. 全局默认参数（日期、分支）
+2. 项目参数（`projects[].params`）
+3. 环境参数（`environments.xxx.params`）
+4. 默认值
 
-## 完整示例
+## CLI 命令参考
 
-```bash
-# 构建 dev 环境所有项目
-./jenkins-auto-build.sh --env dev
-
-# 构建 dev 环境的特定项目
-./jenkins-auto-build.sh --jobs dev:pms-biz-plan-web,dev:pms-order-web
-
-# 使用自定义参数构建
-./jenkins-auto-build.sh --jobs dev:pms-biz-plan-web --params "skip_tests=true&notify=false"
-
-# 列出所有环境
-./jenkins-auto-build.sh --list-envs
-
-# 列出 test 环境的项目
-./jenkins-auto-build.sh --list-projects test
-```
+| 命令 | 说明 |
+|------|------|
+| `--help` | 显示帮助信息 |
+| `-e, --env ENV` | 构建指定环境 |
+| `-j, --jobs JOBS` | 构建指定项目（格式: env:project） |
+| `-m, --mode MODE` | 构建模式：parallel/sequential |
+| `-p, --params PARAMS` | 额外构建参数 |
+| `-c, --config FILE` | 配置文件路径 |
+| `-i, --interactive` | 交互式选择模式 |
+| `--list-envs` | 列出所有环境 |
+| `--list-projects [ENV]` | 列出项目 |
+| `--history` | 查看构建历史 |
+| `--history-stats` | 查看历史统计 |
 
 ## 测试
 
 ```bash
-cd test
-python test-config.py
+# 运行所有测试
+uv run pytest tests/ -v
+
+# 运行单个测试文件
+uv run pytest tests/test_config.py -v
+```
+
+## 架构说明
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                         cli.py                               │
+│                    (命令行入口)                               │
+└─────────────────────────────────────────────────────────────┘
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        ▼                     ▼                     ▼
+┌───────────────┐   ┌───────────────┐   ┌───────────────┐
+│   config.py   │   │  builder.py   │   │  history.py   │
+│  (配置加载)   │   │  (构建编排)   │   │  (历史记录)   │
+└───────────────┘   └───────────────┘   └───────────────┘
+        │                     │
+        │                     ▼
+        │           ┌───────────────┐
+        │           │  jenkins.py   │
+        │           │ (Jenkins API) │
+        │           └───────────────┘
+        │
+        ▼
+┌───────────────┐
+│   utils.py    │
+│  (工具函数)   │
+└───────────────┘
 ```
 
 ## 故障排除
 
 ### 配置文件不存在
-如果配置文件不存在，脚本会回退到内置默认配置。
 
-### Python 未安装
-需要安装 Python 或 uv 来解析 JSON 配置。
+```
+错误：配置文件不存在: jenkins-config.json
+```
 
-### 环境或项目不存在
-使用 `--list-envs` 和 `--list-projects` 查看可用的环境和项目。
+解决：将配置文件放在当前目录或使用 `-c` 参数指定路径。
+
+### EXE 无法找到配置文件
+
+EXE 模式下，配置文件查找顺序：
+1. 当前工作目录
+2. EXE 所在目录
+
+### Jenkins 连接失败
+
+检查：
+- Jenkins 服务器地址是否正确
+- API Token 是否有效
+- 网络是否连通
+
+## License
+
+MIT
