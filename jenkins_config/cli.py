@@ -225,8 +225,24 @@ def main():
         run_interactive_build(config_file, args)
         return
     
+    # 检查是否指定了构建目标
+    # 如果没有指定环境、项目或交互模式，显示帮助
+    if not args.env and not args.jobs:
+        parser.print_help()
+        print("\n提示：请指定要构建的环境 (-e) 或项目 (-j)，或使用交互模式 (-i)")
+        print("示例：")
+        print("  ./jenkins-auto-build.sh -i          # 交互式选择")
+        print("  ./jenkins-auto-build.sh -e dev      # 构建 dev 环境")
+        print("  ./jenkins-auto-build.sh --list-envs # 列出所有环境")
+        return
+    
     # 默认：执行构建流程
-    run_build(config_file, args)
+    try:
+        run_build(config_file, args)
+    except KeyboardInterrupt:
+        print("\n")
+        log_warn("用户取消操作")
+        sys.exit(130)  # 130 = 128 + SIGINT(2)
 
 
 # ============================================================================
