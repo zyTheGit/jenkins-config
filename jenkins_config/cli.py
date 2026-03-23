@@ -446,8 +446,14 @@ def run_interactive_build(config_file: Path, args):
             style=CUSTOM_STYLE
         ).ask()
         
-        if not selected_projects:
+        # 用户按 Esc 或 Ctrl+C 取消
+        if selected_projects is None:
             log_warn("已取消")
+            sys.exit(0)
+        
+        # 没有选择任何项目，提示用户
+        if not selected_projects:
+            log_warn("请至少选择一个项目（使用空格选择，回车确认）")
             sys.exit(0)
         
         # 处理全选
@@ -496,8 +502,14 @@ def run_interactive_build(config_file: Path, args):
             style=CUSTOM_STYLE
         ).ask()
         
-        if not selected_projects:
+        # 用户按 Esc 或 Ctrl+C 取消
+        if selected_projects is None:
             log_warn("已取消")
+            sys.exit(0)
+        
+        # 没有选择任何项目，提示用户
+        if not selected_projects:
+            log_warn("请至少选择一个项目（使用空格选择，回车确认）")
             sys.exit(0)
         
         jobs_filter = selected_projects
