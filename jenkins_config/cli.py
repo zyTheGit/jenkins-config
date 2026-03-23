@@ -230,10 +230,8 @@ def main():
         run_interactive_build(config_file, args)
         return
     
-    # 如果没有指定环境或项目，默认进入交互模式
-    if not args.env and not args.jobs:
-        run_interactive_build(config_file, args)
-        return
+    # 如果没有指定环境或项目，默认构建所有项目
+    # args.env 和 args.jobs 都为 None 时，get_jobs 会返回所有项目
     
     # 默认：执行构建流程
     try:
