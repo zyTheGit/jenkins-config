@@ -569,6 +569,7 @@ def run_interactive_build(config_file: Path, args):
     args.env = selected_env
     args.mode = build_mode
     args.jobs = ",".join(jobs_filter) if jobs_filter else None
+    args.yes = True  # 交互模式已确认，跳过 run_build 中的确认
     
     # 调用构建流程
     run_build(config_file, args)
