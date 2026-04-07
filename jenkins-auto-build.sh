@@ -4,7 +4,11 @@
 # Jenkins 自动构建脚本入口
 # ============================================================================
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if command -v dirname &> /dev/null; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+else
+    SCRIPT_DIR="$(pwd)"
+fi
 cd "$SCRIPT_DIR"
 
 # 使用 uv 运行 Python 模块
