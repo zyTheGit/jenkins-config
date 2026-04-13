@@ -271,6 +271,14 @@ class Builder:
             log_success(f"构建完成：{job.key} (#{build_num}) - 成功")
         elif status == BuildStatus.FAILURE:
             log_error(f"构建失败：{job.key} (#{build_num}) - 失败")
+            # 提取并显示错误信息
+            error_lines = self._extract_error_lines(log_content)
+            if error_lines:
+                print()
+                log_error("控制台错误信息:")
+                for line in error_lines:
+                    print(f"    {line}")
+                print()
         else:
             log_warn(f"构建中止：{job.key} (#{build_num})")
 
@@ -285,6 +293,90 @@ class Builder:
             params=job.params,
             project_name=job.project_name,
         )
+
+    # ========================================================================
+    # 私有方法：错误信息提取
+    # ========================================================================
+
+    def _extract_error_lines(self, log_content: str, max_lines: int = 50) -> list[str]:
+        """
+        从日志中提取错误行
+
+        搜索包含错误关键词的行，用于在控制台显示关键错误信息
+
+        Args:
+            log_content: 构建日志内容
+            max_lines: 最多返回的行数
+
+        Returns:
+            包含错误信息的行列表
+        """
+        if not log_content:
+            return []
+
+        error_keywords = [
+            "ERROR",
+            "FAILURE",
+            "Failed",
+            "Exception",
+            "error:",
+            "fatal:",
+            "FATAL",
+            "BUILD FAILED",
+            "Execution failed",
+            "CMake Error",
+            "make:",
+            "Makefile",
+            "npm ERR!",
+            "ERR!",
+            "Traceback",
+            "called from",
+            "AssertionError",
+            "KeyError",
+            "TypeError",
+            "ValueError",
+            "NameError",
+            "ImportError",
+            "ModuleNotFoundError",
+            "FileNotFoundError",
+            "PermissionError",
+            "ConnectionError",
+            "HTTPConnectionPool",
+            "Connection refused",
+            "timeout",
+            "TimeoutError",
+            "SSL",
+            "certificate",
+            "auth",
+            "Unauthorized",
+            "Forbidden",
+            "401",
+            "403",
+            "404",
+            "500",
+        ]
+
+        lines = log_content.split("\n")
+        error_lines = []
+
+        for line in lines:
+            line_stripped = line.strip()
+            if not line_stripped:
+                continue
+
+            for keyword in error_keywords:
+                if keyword.lower() in line_stripped.lower():
+                    error_lines.append(line_stripped)
+                    break
+
+            if len(error_lines) >= max_lines:
+                break
+
+        if not error_lines:
+            last_lines = [l.strip() for l in lines[-30:] if l.strip()]
+            return last_lines[-max_lines:] if last_lines else []
+
+        return error_lines
 
     # ========================================================================
     # 私有方法：构建监控
