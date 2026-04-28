@@ -13,6 +13,7 @@
   "environments": {
     "dev": {
       "default_branch": "develop",
+      "description": "开发环境30006",
       "params": "skip_tests=false&hot_reload=true",
       "projects": [
         {

@@ -14,13 +14,14 @@
 
 from __future__ import annotations
 import time
+from datetime import datetime
 from dataclasses import dataclass, field
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .jenkins import BuildStatus
-from .utils import log_info, log_success, log_error, log_warn
+from .utils import log_info, log_success, log_error, log_warn, log_debug
 
 # TYPE_CHECKING 用于类型注解，避免循环导入
 # 在运行时这些导入不会执行，只用于类型检查
@@ -195,6 +196,8 @@ class Builder:
         """
         log_info(f"正在触发构建：{job.key} ({job.path})")
 
+        Path(log_dir).mkdir(parents=True, exist_ok=True)
+
         # ------------------------------------------------------------
         # 步骤 1：触发构建
         # ------------------------------------------------------------
@@ -202,12 +205,18 @@ class Builder:
 
         if not queue_url:
             log_error(f"触发构建失败：{job.key}")
+            error_log_file = self._save_error_log(
+                log_dir,
+                job,
+                error_type="trigger_failed",
+                error_msg="触发构建失败 - Jenkins POST 请求未返回队列 URL",
+            )
             return BuildResult(
                 job_key=job.key,
                 build_num=0,
                 status=BuildStatus.FAILURE,
                 duration=0,
-                log_file="",
+                log_file=error_log_file,
                 error="触发构建失败",
                 branch=job.branch,
                 params=job.params,
@@ -224,12 +233,19 @@ class Builder:
 
         if not build_num:
             log_error(f"获取构建编号超时：{job.key}")
+            error_log_file = self._save_error_log(
+                log_dir,
+                job,
+                error_type="queue_timeout",
+                error_msg="获取构建编号超时 - 30秒内未分配执行器",
+                extra_info=f"队列URL: {queue_url}",
+            )
             return BuildResult(
                 job_key=job.key,
                 build_num=0,
                 status=BuildStatus.TIMEOUT,
                 duration=0,
-                log_file="",
+                log_file=error_log_file,
                 error="获取构建编号超时",
                 branch=job.branch,
                 params=job.params,
@@ -246,14 +262,38 @@ class Builder:
         # ------------------------------------------------------------
         # 步骤 4：获取并保存日志
         # ------------------------------------------------------------
-        # 确保日志目录存在
-        Path(log_dir).mkdir(parents=True, exist_ok=True)
 
         # 日志文件命名：{job_key}_#{build_num}.log
         log_file = f"{log_dir}/{job.key}_#{build_num}.log"
 
         # 获取日志内容
         log_content = self.client.get_build_log(job.path, build_num)
+
+        # 如果日志为空且状态不是成功，添加诊断信息
+        if not log_content and status != BuildStatus.SUCCESS:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            diagnostic_info = [
+                "=" * 60,
+                "构建日志获取失败或为空",
+                "=" * 60,
+                f"时间: {timestamp}",
+                f"构建编号: #{build_num}",
+                f"最终状态: {status.value}",
+                "",
+                "可能原因:",
+                "  1. 构建刚刚开始，日志还未写入",
+                "  2. Jenkins API 请求失败",
+                "  3. 构建被中止或取消",
+                "  4. 网络连接问题",
+                "",
+                "建议操作:",
+                "  1. 检查 Jenkins 控制台查看构建状态",
+                f"  2. 直接访问: {self.client.base_url}/job/{job.path}/{build_num}/console",
+                "  3. 稍后重试获取日志",
+                "=" * 60,
+            ]
+            log_content = "\n".join(diagnostic_info)
+            log_warn(f"日志内容为空，已添加诊断信息")
 
         # 写入文件
         with open(log_file, "w", encoding="utf-8") as f:
@@ -378,6 +418,84 @@ class Builder:
 
         return error_lines
 
+    def _save_error_log(
+        self,
+        log_dir: str,
+        job: Job,
+        error_type: str,
+        error_msg: str,
+        extra_info: str = "",
+    ) -> str:
+        """
+        保存错误日志文件
+
+        在触发失败或获取编号超时时，创建错误日志文件记录失败信息。
+
+        Args:
+            log_dir: 日志目录
+            job: Job 对象
+            error_type: 错误类型 (trigger_failed / queue_timeout)
+            error_msg: 错误消息
+            extra_info: 额外信息
+
+        Returns:
+            错误日志文件路径
+        """
+        error_log_file = f"{log_dir}/{job.key}_error.log"
+
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        content_lines = [
+            "=" * 60,
+            f"构建错误日志 - {job.key}",
+            "=" * 60,
+            f"时间: {timestamp}",
+            f"Job 路径: {job.path}",
+            f"项目名称: {job.project_name}",
+            f"分支: {job.branch}",
+            "",
+            f"错误类型: {error_type}",
+            f"错误详情: {error_msg}",
+        ]
+
+        if extra_info:
+            content_lines.append(f"附加信息: {extra_info}")
+
+        if job.params:
+            content_lines.append("")
+            content_lines.append("构建参数:")
+            for k, v in job.params.items():
+                content_lines.append(f"  {k}: {v}")
+
+        content_lines.append("")
+        content_lines.append("=" * 60)
+        content_lines.append("诊断建议:")
+        content_lines.append("")
+        if error_type == "trigger_failed":
+            content_lines.extend(
+                [
+                    "  1. 检查 Jenkins Job 是否存在",
+                    "  2. 检查用户是否有触发该 Job 的权限",
+                    "  3. 检查 Jenkins 服务器是否正常运行",
+                    "  4. 检查网络连接是否正常",
+                ]
+            )
+        elif error_type == "queue_timeout":
+            content_lines.extend(
+                [
+                    "  1. 检查 Jenkins 执行器是否繁忙",
+                    "  2. 检查队列中是否有其他构建阻塞",
+                    "  3. 考虑增加超时时间配置",
+                    "  4. 检查构建是否被手动取消",
+                ]
+            )
+        content_lines.append("=" * 60)
+
+        with open(error_log_file, "w", encoding="utf-8") as f:
+            f.write("\n".join(content_lines))
+
+        log_info(f"错误日志已保存：{error_log_file}")
+        return error_log_file
+
     # ========================================================================
     # 私有方法：构建监控
     # ========================================================================
@@ -403,14 +521,21 @@ class Builder:
         timeout = self.config.build.build_timeout
         poll_interval = self.config.build.poll_interval
 
+        log_debug(
+            f"开始监控构建 #{build_num}，超时: {timeout}秒，轮询间隔: {poll_interval}秒"
+        )
+
         while True:
             # 检查是否超时
             elapsed = time.time() - start
             if elapsed >= timeout:
+                log_debug(f"构建监控超时: {elapsed}秒 >= {timeout}秒")
                 return BuildStatus.TIMEOUT
 
             # 查询当前状态
             info = self.client.get_build_status(job.path, build_num)
+
+            log_debug(f"构建 #{build_num} 当前状态: {info.status.value}")
 
             # 检查是否完成（SUCCESS、FAILURE、ABORTED 都是终态）
             if info.status in (
@@ -418,6 +543,7 @@ class Builder:
                 BuildStatus.FAILURE,
                 BuildStatus.ABORTED,
             ):
+                log_debug(f"构建 #{build_num} 已完成: {info.status.value}")
                 return info.status
 
             # 输出进度信息

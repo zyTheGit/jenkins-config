@@ -51,9 +51,12 @@ from .utils import (
     log_success,
     log_error,
     log_warn,
+    log_debug,
     print_sep,
     print_header,
     format_duration,
+    set_debug_mode,
+    is_debug_mode,
 )
 
 
@@ -117,6 +120,9 @@ def main():
         "-p", "--params", help="额外构建参数，格式: key=value&key2=value2"
     )
     parser.add_argument(
+        "-b", "--branch", help="自定义构建分支，覆盖配置文件中的默认分支"
+    )
+    parser.add_argument(
         "-c",
         "--config",
         default="jenkins-config.json",
@@ -155,6 +161,13 @@ def main():
 
     # 解析命令行参数
     args = parser.parse_args()
+
+    # ------------------------------------------------------------------------
+    # 设置调试模式
+    # ------------------------------------------------------------------------
+    if args.debug:
+        set_debug_mode(True)
+        log_debug("调试模式已启用")
 
     # ------------------------------------------------------------------------
     # 确定配置文件路径
@@ -532,14 +545,59 @@ def run_interactive_build(config_file: Path, args):
         sys.exit(1)
 
     # ========================================================================
-    # 步骤 5：确认构建
+    # 步骤 5：选择分支
+    # ========================================================================
+    default_branches = [job.branch for job in jobs]
+    if len(set(default_branches)) == 1:
+        default_branch_display = default_branches[0]
+    else:
+        default_branch_display = "各项目使用各自默认分支"
+
+    branch_choice = questionary.select(
+        "请选择分支:",
+        choices=[
+            questionary.Choice(
+                title=f"使用默认分支 ({default_branch_display})",
+                value="default",
+            ),
+            questionary.Choice(
+                title="自定义分支 - 手动输入分支名称",
+                value="custom",
+            ),
+        ],
+        style=CUSTOM_STYLE,
+    ).ask()
+
+    if not branch_choice:
+        log_warn("已取消")
+        sys.exit(0)
+
+    custom_branch = None
+    if branch_choice == "custom":
+        custom_branch = questionary.text(
+            "请输入分支名称:",
+            default="develop",
+            style=CUSTOM_STYLE,
+        ).ask()
+
+        if not custom_branch:
+            log_warn("已取消")
+            sys.exit(0)
+
+        log_info(f"使用自定义分支: {custom_branch}")
+        for job in jobs:
+            job.branch = custom_branch
+            job.params["branch"] = custom_branch
+
+    # ========================================================================
+    # 步骤 6：确认构建
     # ========================================================================
     print()
     print_sep("-")
     print(f"即将构建以下 {len(jobs)} 个项目:")
     print_sep("-")
     for job in jobs:
-        print(f"  - [{job.env}] {job.key} ({job.path})")
+        print(f"  - [{job.env}] {job.key} ({job.path}) - 分支: {job.branch}")
     print_sep("-")
 
     confirm = questionary.confirm(
@@ -551,12 +609,13 @@ def run_interactive_build(config_file: Path, args):
         sys.exit(0)
 
     # ========================================================================
-    # 步骤 6：执行构建
+    # 步骤 7：执行构建
     # ========================================================================
     print()
     args.env = selected_env
     args.mode = build_mode
     args.jobs = ",".join(jobs_filter) if jobs_filter else None
+    args.branch = custom_branch  # 传递自定义分支
     args.yes = True  # 交互模式已确认，跳过 run_build 中的确认
 
     # 调用构建流程
@@ -702,6 +761,17 @@ def run_build(config_file: Path, args):
     if not jobs:
         log_error("没有找到匹配的项目")
         sys.exit(1)
+
+    # ------------------------------------------------------------------------
+    # 覆盖分支参数
+    # -b 参数指定的分支会覆盖所有 job 的默认分支
+    # ------------------------------------------------------------------------
+    if getattr(args, "branch", None):
+        custom_branch = args.branch
+        log_info(f"使用自定义分支: {custom_branch}")
+        for job in jobs:
+            job.branch = custom_branch
+            job.params["branch"] = custom_branch
 
     # ------------------------------------------------------------------------
     # 显示将要构建的项目并确认

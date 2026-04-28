@@ -3,7 +3,7 @@
 工具模块 - 提供日志输出、格式化等通用功能
 
 这个模块包含了整个项目通用的工具函数，主要用于：
-1. 彩色日志输出（INFO、SUCCESS、ERROR、WARN）
+1. 彩色日志输出（INFO、SUCCESS、ERROR、WARN、DEBUG）
 2. 分隔线打印
 3. 时间格式化
 
@@ -12,21 +12,46 @@ ANSI 颜色码说明：
 - \033[0;32m - 绿色（green）
 - \033[0;31m - 红色（red）
 - \033[0;33m - 黄色（yellow）
+- \033[0;35m - 紫色（magenta）- DEBUG
 - \033[0m - 重置颜色
 """
 
 import sys
 
 
+DEBUG_MODE = False
+
+
+def set_debug_mode(enabled: bool):
+    """
+    设置调试模式
+
+    Args:
+        enabled: 是否启用调试模式
+    """
+    global DEBUG_MODE
+    DEBUG_MODE = enabled
+
+
+def is_debug_mode() -> bool:
+    """
+    检查是否处于调试模式
+
+    Returns:
+        True 如果调试模式已启用
+    """
+    return DEBUG_MODE
+
+
 def log_info(msg: str):
     """
     输出信息日志（青色）
-    
+
     用于输出一般性信息，如：正在执行的操作、状态更新等
-    
+
     Args:
         msg: 要输出的消息内容
-    
+
     Example:
         >>> log_info("正在触发构建：dev_project")
         [INFO] 正在触发构建：dev_project  # 青色显示
@@ -39,12 +64,12 @@ def log_info(msg: str):
 def log_success(msg: str):
     """
     输出成功日志（绿色）
-    
+
     用于输出成功信息，如：构建完成、操作成功等
-    
+
     Args:
         msg: 要输出的消息内容
-    
+
     Example:
         >>> log_success("构建完成：dev_project #123")
         [SUCCESS] 构建完成：dev_project #123  # 绿色显示
@@ -55,12 +80,12 @@ def log_success(msg: str):
 def log_error(msg: str):
     """
     输出错误日志（红色）
-    
+
     用于输出错误信息，如：构建失败、配置错误等
-    
+
     Args:
         msg: 要输出的消息内容
-    
+
     Example:
         >>> log_error("触发构建失败：dev_project")
         [ERROR] 触发构建失败：dev_project  # 红色显示
@@ -71,12 +96,12 @@ def log_error(msg: str):
 def log_warn(msg: str):
     """
     输出警告日志（黄色）
-    
+
     用于输出警告信息，如：构建中止、参数缺失等
-    
+
     Args:
         msg: 要输出的消息内容
-    
+
     Example:
         >>> log_warn("构建中止：dev_project #123")
         [WARN] 构建中止：dev_project #123  # 黄色显示
@@ -84,15 +109,33 @@ def log_warn(msg: str):
     print(f"\033[0;33m[WARN] {msg}\033[0m", file=sys.stderr)
 
 
+def log_debug(msg: str):
+    """
+    输出调试日志（紫色）
+
+    仅在调试模式下输出，用于详细的调试信息，如：HTTP 请求详情、内部状态等
+
+    Args:
+        msg: 要输出的消息内容
+
+    Example:
+        >>> set_debug_mode(True)
+        >>> log_debug("HTTP POST to /job/my-project/buildWithParameters")
+        [DEBUG] HTTP POST to /job/my-project/buildWithParameters  # 紫色显示
+    """
+    if DEBUG_MODE:
+        print(f"\033[0;35m[DEBUG] {msg}\033[0m", file=sys.stderr)
+
+
 def print_sep(char: str = "="):
     """
     打印分隔线
-    
+
     用于在输出中创建视觉分隔，帮助区分不同的输出区块
-    
+
     Args:
         char: 分隔线使用的字符，默认为 "=""
-    
+
     Example:
         >>> print_sep("-")
         --------------------------------------------------------------------------------
@@ -106,15 +149,15 @@ def print_sep(char: str = "="):
 def print_header(title: str):
     """
     打印标题头
-    
+
     用于输出带边框的标题，格式为：
     ====================
     标题内容
     ====================
-    
+
     Args:
         title: 标题内容
-    
+
     Example:
         >>> print_header("构建结果汇总")
         ================================================================================
@@ -129,15 +172,15 @@ def print_header(title: str):
 def format_duration(seconds: int) -> str:
     """
     格式化时长
-    
+
     将秒数转换为易读的"X分X秒"格式
-    
+
     Args:
         seconds: 秒数
-    
+
     Returns:
         格式化后的时间字符串，如 "1分30秒"
-    
+
     Example:
         >>> format_duration(0)
         '0分0秒'

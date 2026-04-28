@@ -25,6 +25,8 @@ from urllib.parse import quote
 from typing import Optional
 import requests
 
+from .utils import log_debug, is_debug_mode
+
 
 # ============================================================================
 # 枚举和数据类定义
@@ -196,6 +198,9 @@ class JenkinsClient:
         # 构建完整 URL
         url = f"{self.base_url}/job/{encoded_path}/buildWithParameters"
 
+        log_debug(f"触发构建: {url}")
+        log_debug(f"参数: {params}")
+
         # 准备请求头
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
@@ -203,6 +208,7 @@ class JenkinsClient:
         crumb = self._get_crumb()
         if crumb:
             headers[crumb[0]] = crumb[1]
+            log_debug(f"CSRF Token: {crumb[0]}={crumb[1]}")
 
         try:
             # 发送 POST 请求
@@ -216,12 +222,19 @@ class JenkinsClient:
                 allow_redirects=False,
             )
 
+            log_debug(f"响应状态码: {resp.status_code}")
+            log_debug(f"响应头: {dict(resp.headers)}")
+
             # 201 Created 表示构建请求成功入队
             if resp.status_code == 201:
                 # 队列项 URL 在 Location 头中
-                return resp.headers.get("Location")
-        except Exception:
-            pass
+                queue_url = resp.headers.get("Location")
+                log_debug(f"队列 URL: {queue_url}")
+                return queue_url
+            else:
+                log_debug(f"触发失败，响应内容: {resp.text[:500]}")
+        except Exception as e:
+            log_debug(f"触发异常: {e}")
 
         return None
 
@@ -254,29 +267,35 @@ class JenkinsClient:
             789
         """
         # 轮询 timeout 次，每次间隔 1 秒
-        for _ in range(timeout):
+        for i in range(timeout):
             try:
-                resp = self.session.get(
-                    f"{queue_url.rstrip('/')}/api/json", timeout=self.timeout
-                )
+                api_url = f"{queue_url.rstrip('/')}/api/json"
+                log_debug(f"查询队列: {api_url} (第 {i + 1}/{timeout} 次)")
+
+                resp = self.session.get(api_url, timeout=self.timeout)
                 if resp.ok:
                     data = resp.json()
+                    log_debug(f"队列响应: {data}")
 
                     # 检查是否被取消
                     if data.get("cancelled"):
+                        log_debug("构建已被取消")
                         return None
 
                     # 检查是否已分配执行器
                     executable = data.get("executable")
                     if executable and executable.get("number"):
-                        return executable["number"]
+                        build_num = executable["number"]
+                        log_debug(f"已分配构建编号: #{build_num}")
+                        return build_num
 
-            except Exception:
-                pass
+            except Exception as e:
+                log_debug(f"查询队列异常: {e}")
 
             # 等待 1 秒后重试
             time.sleep(1)
 
+        log_debug("获取构建编号超时")
         return None
 
     # ========================================================================
@@ -311,12 +330,16 @@ class JenkinsClient:
         encoded_path = quote(job_path, safe="")
         url = f"{self.base_url}/job/{encoded_path}/{build_num}/api/json"
 
+        log_debug(f"查询构建状态: {url}")
+
         try:
             resp = self.session.get(url, timeout=self.timeout)
             if resp.ok:
                 data = resp.json()
                 result = data.get("result")  # SUCCESS, FAILURE, ABORTED, null
                 duration_ms = data.get("duration", 0)  # 毫秒
+
+                log_debug(f"构建结果: {result}, 耗时: {duration_ms}ms")
 
                 # 将字符串结果转换为枚举
                 if result == "SUCCESS":
@@ -335,8 +358,10 @@ class JenkinsClient:
                     result=result,
                     duration=duration_ms // 1000,  # 转换为秒
                 )
-        except Exception:
-            pass
+            else:
+                log_debug(f"查询状态失败: HTTP {resp.status_code}")
+        except Exception as e:
+            log_debug(f"查询状态异常: {e}")
 
         # 请求失败时返回默认状态
         return BuildInfo(
@@ -372,11 +397,17 @@ class JenkinsClient:
         encoded_path = quote(job_path, safe="")
         url = f"{self.base_url}/job/{encoded_path}/{build_num}/consoleText"
 
+        log_debug(f"获取构建日志: {url}")
+
         try:
             resp = self.session.get(url, timeout=self.timeout)
             if resp.ok:
-                return resp.text
-        except Exception:
-            pass
+                log_content = resp.text
+                log_debug(f"日志长度: {len(log_content)} 字符")
+                return log_content
+            else:
+                log_debug(f"获取日志失败: HTTP {resp.status_code}")
+        except Exception as e:
+            log_debug(f"获取日志异常: {e}")
 
         return ""
