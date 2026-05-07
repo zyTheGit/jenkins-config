@@ -17,6 +17,11 @@ import sys
 from pathlib import Path
 
 
+def _binary_name() -> str:
+    """根据平台返回可执行文件名称"""
+    return "jenkins-build.exe" if sys.platform == "win32" else "jenkins-build"
+
+
 def clean_build():
     """清理构建目录"""
     print("正在清理构建目录...")
@@ -112,9 +117,9 @@ def build_exe(mode='onefile'):
         print("=" * 60)
         
         if mode == 'onefile':
-            exe_path = Path('dist/jenkins-build.exe')
+            exe_path = Path(f'dist/{_binary_name()}')
         else:
-            exe_path = Path('dist/jenkins-build/jenkins-build.exe')
+            exe_path = Path(f'dist/jenkins-build/{_binary_name()}')
         
         if exe_path.exists():
             size_mb = exe_path.stat().st_size / (1024 * 1024)

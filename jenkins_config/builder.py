@@ -264,7 +264,7 @@ class Builder:
         # ------------------------------------------------------------
 
         # 日志文件命名：{job_key}_#{build_num}.log
-        log_file = f"{log_dir}/{job.key}_#{build_num}.log"
+        log_file = str(Path(log_dir) / f"{job.key}_#{build_num}.log")
 
         # 获取日志内容
         log_content = self.client.get_build_log(job.path, build_num)
@@ -441,7 +441,7 @@ class Builder:
         Returns:
             错误日志文件路径
         """
-        error_log_file = f"{log_dir}/{job.key}_error.log"
+        error_log_file = str(Path(log_dir) / f"{job.key}_error.log")
 
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         content_lines = [

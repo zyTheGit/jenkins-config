@@ -18,6 +18,16 @@ ANSI 颜色码说明：
 
 import sys
 
+# Windows 旧版控制台 ANSI 颜色支持
+# colorama 将 ANSI 转义码转换为 Windows API 调用
+# macOS/Linux 下无需处理（原生支持）
+try:
+    import colorama
+
+    colorama.init()
+except ImportError:
+    pass
+
 
 DEBUG_MODE = False
 

@@ -16,19 +16,22 @@
 
 使用示例：
     # 显示帮助
-    ./jenkins-auto-build.sh --help
+    uv run python -m jenkins_config.cli --help
+    # 或使用包装脚本：
+    #   ./jenkins-auto-build.sh --help       (macOS/Linux)
+    #   .\\jenkins-auto-build.ps1 --help     (Windows)
 
     # 列出所有环境
-    ./jenkins-auto-build.sh --list-envs
+    uv run python -m jenkins_config.cli --list-envs
 
     # 构建指定环境
-    ./jenkins-auto-build.sh -e dev
+    uv run python -m jenkins_config.cli -e dev
 
     # 构建指定项目
-    ./jenkins-auto-build.sh -j dev:project-a,test:project-b
+    uv run python -m jenkins_config.cli -j dev:project-a,test:project-b
 
     # 交互式选择
-    ./jenkins-auto-build.sh -i
+    uv run python -m jenkins_config.cli -i
 """
 
 import argparse

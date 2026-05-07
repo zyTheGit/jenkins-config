@@ -14,13 +14,18 @@ uv run pytest tests/test_config.py -v
 # Run CLI directly
 uv run python -m jenkins_config.cli --help
 
-# Use shell wrapper
+# Use shell wrapper (macOS/Linux)
 ./jenkins-auto-build.sh -i                  # Interactive mode
 ./jenkins-auto-build.sh --list-envs         # List environments
 ./jenkins-auto-build.sh -e dev              # Build dev environment
 
-# Package to EXE
-uv run python build.py                      # Single-file EXE (~14 MB)
+# Use PowerShell wrapper (Windows)
+./jenkins-auto-build.ps1 -i                 # Interactive mode
+./jenkins-auto-build.ps1 --list-envs        # List environments
+./jenkins-auto-build.ps1 -e dev             # Build dev environment
+
+# Package to platform binary
+uv run python build.py                      # Single-file binary (~14 MB)
 uv run python build.py --dir                # Directory mode (faster startup)
 uv run python build.py --clean              # Clean and rebuild
 ```
@@ -54,4 +59,5 @@ cli.py (entry) ─┬── config.py    (Config, Job, Environment dataclasses; 
 
 - `requests` — Jenkins HTTP API
 - `questionary` — interactive terminal UI
-- dev: `pytest`, `pyinstaller`
+- `colorama` — Windows ANSI color support (optional, auto-detected)
+- dev: `pytest`, `pyinstaller`, `colorama`
