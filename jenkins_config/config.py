@@ -417,6 +417,50 @@ class Config:
         return result
 
     @staticmethod
+    def generate_template() -> dict:
+        """
+        生成最小配置文件模板
+
+        生成一个包含必填字段和占位符的配置文件模板字典，
+        用户编辑后即可使用。
+
+        Returns:
+            配置模板字典
+        """
+        return {
+            "server": {
+                "url": "http://your-jenkins-server:8080",
+                "username": "admin",
+                "token": "your-api-token",
+            },
+            "build": {
+                "mode": "parallel",
+                "poll_interval": 10,
+                "build_timeout": 3600,
+                "curl_timeout": 30,
+                "log_dir": "./jenkins_logs",
+                "log_retention_days": 3,
+            },
+            "environments": {
+                "dev": {
+                    "default_branch": "develop",
+                    "description": "开发环境",
+                    "projects": [{"name": "project-a"}],
+                },
+                "test": {
+                    "default_branch": "test",
+                    "description": "测试环境",
+                    "projects": [{"name": "project-a-test"}],
+                },
+                "prod": {
+                    "default_branch": "main",
+                    "description": "生产环境",
+                    "projects": [{"name": "project-a-prod"}],
+                },
+            },
+        }
+
+    @staticmethod
     def show_template():
         """
         打印配置文件模板（含必填/可选说明）

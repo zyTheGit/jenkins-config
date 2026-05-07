@@ -4,6 +4,7 @@
 
 ## 功能特性
 
+- **初始化模板** - `--init` 快速生成配置文件模板，支持交互式引导
 - **并行/顺序构建** - 支持同时构建多个项目或按顺序逐个构建
 - **交互式选择** - 终端界面选择要构建的环境和项目
 - **构建历史** - 自动记录构建结果，支持查看统计
@@ -21,7 +22,10 @@ cd jenkins-config
 # 安装依赖
 uv sync
 
-# 运行
+# 初始化配置文件（按需编辑）
+./jenkins-auto-build.sh --init
+
+# 查看帮助
 ./jenkins-auto-build.sh --help
 ```
 
@@ -52,6 +56,12 @@ uv sync
 ### 基本命令
 
 ```bash
+# 生成配置文件模板（首次使用）
+./jenkins-auto-build.sh --init
+
+# 交互式引导生成配置文件
+./jenkins-auto-build.sh --init -i
+
 # 显示帮助
 ./jenkins-auto-build.sh --help
 
@@ -259,6 +269,8 @@ jenkins-config/
 | 命令 | 说明 |
 |------|------|
 | `--help` | 显示帮助信息 |
+| `--init` | 生成配置文件模板（结合 `-i` 交互式引导） |
+| `--force` | 强制覆盖已存在的配置文件（结合 `--init` 使用） |
 | `-e, --env ENV` | 构建指定环境 |
 | `-j, --jobs JOBS` | 构建指定项目（格式: env:project） |
 | `-m, --mode MODE` | 构建模式：parallel/sequential |
@@ -316,7 +328,15 @@ uv run pytest tests/test_config.py -v
 错误：配置文件不存在: jenkins-config.json
 ```
 
-解决：将配置文件放在当前目录或使用 `-c` 参数指定路径。
+解决：使用 `--init` 快速生成配置文件模板，或使用 `-c` 参数指定已有配置路径。
+
+```bash
+# 生成配置文件模板（含 dev/test/prod 示例环境）
+./jenkins-auto-build.sh --init
+
+# 交互式引导填写服务器信息
+./jenkins-auto-build.sh --init -i
+```
 
 ### EXE 无法找到配置文件
 
