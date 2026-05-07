@@ -45,3 +45,4 @@ jenkins-config.json
 # PyInstaller
 *.spec
 !jenkins-build.spec
+.claude

@@ -14,6 +14,7 @@
     "dev": {
       "default_branch": "develop",
       "description": "开发环境30006",
+      "git_param": "GIT_BRANCH",
       "params": "skip_tests=false&hot_reload=true",
       "projects": [
         {
@@ -29,7 +30,8 @@
         {
           "name": "pms-user-web",
           "branch": "feature/new-ui",
-          "params": "skip_tests=false"
+          "params": "skip_tests=false",
+          "git_param": "BRANCH"
         }
       ]
     },
@@ -58,8 +60,8 @@
         },
         {
           "name": "pms-order-web-prod",
-          "branch": "main",
-          "params": "skip_tests=false&notify=true"
+          "branch": "origin/prod",
+          "git_param": "BRANCH"
         }
       ]
     }

@@ -32,8 +32,9 @@
 """
 
 import argparse
+import shutil
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # questionary 库提供交互式终端界面
@@ -158,6 +159,11 @@ def main():
     # 其他选项
     # ------------------------------------------------------------------------
     parser.add_argument("-d", "--debug", action="store_true", help="调试模式")
+    parser.add_argument(
+        "--help-config",
+        action="store_true",
+        help="显示配置文件模板（含必填/可选字段说明）",
+    )
 
     # 解析命令行参数
     args = parser.parse_args()
@@ -224,6 +230,10 @@ def main():
         show_history_stats(config_file)
         return
 
+    if args.help_config:
+        Config.show_template()
+        return
+
     if args.rebuild_last:
         run_rebuild_last(config_file, args)
         return
@@ -261,8 +271,11 @@ def list_environments(config_file: Path):
     """
     config = Config.load(str(config_file))
     print_header("所有环境")
-    for env in config.list_environments():
-        print(f"  - {env}")
+    for env, desc in config.list_environments():
+        if desc:
+            print(f"  - {env} ({desc})")
+        else:
+            print(f"  - {env}")
 
 
 def list_projects(config_file: Path, env: str | None):
@@ -286,10 +299,13 @@ def list_projects(config_file: Path, env: str | None):
         # 显示所有环境的项目（按环境分组）
         print_header("所有环境的项目")
         current_env = None
+        current_desc = ""
         for e, name, path in config.list_projects():
             # 环境变化时打印环境标题
             if e != current_env:
-                print(f"\n[{e}]")
+                desc = config.environments[e].description if e in config.environments else ""
+                header = f"\n[{e}]" if not desc else f"\n[{e}] ({desc})"
+                print(header)
                 current_env = e
             print(f"  - {name} ({path})")
 
@@ -413,8 +429,15 @@ def run_interactive_build(config_file: Path, args):
             sys.exit(1)
 
         # 选择环境
+        env_choices = [
+            questionary.Choice(
+                title=f"{env} ({desc})" if desc else env,
+                value=env,
+            )
+            for env, desc in config.list_environments()
+        ]
         selected_env = questionary.select(
-            "请选择要构建的环境:", choices=envs, style=CUSTOM_STYLE
+            "请选择要构建的环境:", choices=env_choices, style=CUSTOM_STYLE
         ).ask()
 
         if not selected_env:
@@ -513,84 +536,39 @@ def run_interactive_build(config_file: Path, args):
 
     # ========================================================================
     # 步骤 3：选择构建模式
+    # 如果只有一个工程，直接使用并行模式（单工程并行/顺序无区别）
     # ========================================================================
-    build_mode = questionary.select(
-        "请选择构建模式:",
-        choices=[
-            questionary.Choice(title="并行构建 (同时构建所有项目)", value="parallel"),
-            questionary.Choice(title="顺序构建 (按顺序逐个构建)", value="sequential"),
-        ],
-        style=CUSTOM_STYLE,
-    ).ask()
-
-    if not build_mode:
-        log_warn("已取消")
-        sys.exit(0)
-
-    # ========================================================================
-    # 步骤 4：获取要构建的 jobs
-    # ========================================================================
+    # 先获取 jobs 来判断工程数量
     if build_method == "by_env" and jobs_filter is None:
-        # 按环境构建且全选
         jobs = config.get_jobs(env=selected_env)
     elif build_method == "by_env":
-        # 按环境构建且有筛选
         jobs = config.get_jobs(env=selected_env, jobs=jobs_filter)
     else:
-        # 按项目构建
         jobs = config.get_jobs(jobs=jobs_filter)
 
     if not jobs:
         log_error("没有找到匹配的项目")
         sys.exit(1)
 
-    # ========================================================================
-    # 步骤 5：选择分支
-    # ========================================================================
-    default_branches = [job.branch for job in jobs]
-    if len(set(default_branches)) == 1:
-        default_branch_display = default_branches[0]
+    if len(jobs) == 1:
+        build_mode = "parallel"
+        log_info("仅一个构建工程，自动使用并行模式")
     else:
-        default_branch_display = "各项目使用各自默认分支"
-
-    branch_choice = questionary.select(
-        "请选择分支:",
-        choices=[
-            questionary.Choice(
-                title=f"使用默认分支 ({default_branch_display})",
-                value="default",
-            ),
-            questionary.Choice(
-                title="自定义分支 - 手动输入分支名称",
-                value="custom",
-            ),
-        ],
-        style=CUSTOM_STYLE,
-    ).ask()
-
-    if not branch_choice:
-        log_warn("已取消")
-        sys.exit(0)
-
-    custom_branch = None
-    if branch_choice == "custom":
-        custom_branch = questionary.text(
-            "请输入分支名称:",
-            default="develop",
+        build_mode = questionary.select(
+            "请选择构建模式:",
+            choices=[
+                questionary.Choice(title="并行构建 (同时构建所有项目)", value="parallel"),
+                questionary.Choice(title="顺序构建 (按顺序逐个构建)", value="sequential"),
+            ],
             style=CUSTOM_STYLE,
         ).ask()
 
-        if not custom_branch:
+        if not build_mode:
             log_warn("已取消")
             sys.exit(0)
 
-        log_info(f"使用自定义分支: {custom_branch}")
-        for job in jobs:
-            job.branch = custom_branch
-            job.params["branch"] = custom_branch
-
     # ========================================================================
-    # 步骤 6：确认构建
+    # 步骤 4：确认构建
     # ========================================================================
     print()
     print_sep("-")
@@ -609,13 +587,13 @@ def run_interactive_build(config_file: Path, args):
         sys.exit(0)
 
     # ========================================================================
-    # 步骤 7：执行构建
+    # 步骤 5：执行构建
     # ========================================================================
     print()
     args.env = selected_env
     args.mode = build_mode
     args.jobs = ",".join(jobs_filter) if jobs_filter else None
-    args.branch = custom_branch  # 传递自定义分支
+    args.branch = None
     args.yes = True  # 交互模式已确认，跳过 run_build 中的确认
 
     # 调用构建流程
@@ -625,6 +603,48 @@ def run_interactive_build(config_file: Path, args):
 # ============================================================================
 # 构建执行函数
 # ============================================================================
+
+
+# ============================================================================
+# 日志清理函数
+# ============================================================================
+
+
+def _cleanup_old_logs(log_dir: str, retention_days: int):
+    """
+    清理超过保留天数的旧日志目录
+
+    扫描日志根目录下的 build_YYYYMMDD/ 子目录，删除日期早于
+    当前时间减去保留天数的目录。
+
+    Args:
+        log_dir: 日志根目录
+        retention_days: 保留天数
+    """
+    log_root = Path(log_dir)
+    if not log_root.exists():
+        return
+
+    cutoff = datetime.now() - timedelta(days=retention_days)
+    cutoff_str = cutoff.strftime("%Y%m%d")
+    cleaned = 0
+
+    for dir_path in sorted(log_root.iterdir()):
+        if not dir_path.is_dir():
+            continue
+        # 匹配 build_YYYYMMDD 格式的目录
+        if not dir_path.name.startswith("build_"):
+            continue
+        date_part = dir_path.name[len("build_"):]
+        if len(date_part) != 8 or not date_part.isdigit():
+            continue
+        if date_part < cutoff_str:
+            shutil.rmtree(dir_path)
+            log_info(f"已清理旧日志目录: {dir_path}")
+            cleaned += 1
+
+    if cleaned > 0:
+        log_info(f"共清理 {cleaned} 个旧日志目录（保留 {retention_days} 天内的日志）")
 
 
 def run_rebuild_last(config_file: Path, args):
@@ -683,6 +703,9 @@ def run_rebuild_last(config_file: Path, args):
             print("\n")
             log_warn("已取消重建")
             sys.exit(130)
+
+    # 清理旧日志
+    _cleanup_old_logs(config.build.log_dir, config.build.log_retention_days)
 
     log_dir = Path(config.build.log_dir) / f"build_{datetime.now().strftime('%Y%m%d')}"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -771,7 +794,7 @@ def run_build(config_file: Path, args):
         log_info(f"使用自定义分支: {custom_branch}")
         for job in jobs:
             job.branch = custom_branch
-            job.params["branch"] = custom_branch
+            job.params[job.git_param] = custom_branch
 
     # ------------------------------------------------------------------------
     # 显示将要构建的项目并确认
@@ -798,6 +821,11 @@ def run_build(config_file: Path, args):
             print("\n")
             log_warn("已取消构建")
             sys.exit(130)
+
+    # ------------------------------------------------------------------------
+    # 清理旧日志
+    # ------------------------------------------------------------------------
+    _cleanup_old_logs(config.build.log_dir, config.build.log_retention_days)
 
     # ------------------------------------------------------------------------
     # 创建日志目录

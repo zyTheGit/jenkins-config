@@ -219,6 +219,34 @@ jenkins-config/
 | `environments.*.default_branch` | 默认分支 | main |
 | `environments.*.params` | 环境参数 | - |
 
+### Git 参数配置（git-parameter-plugin）
+
+如果你的 Jenkins Job 使用了 `git-parameter-plugin` 插件，需要通过 `git_param` 指定插件定义的参数名。
+
+```json
+{
+  "environments": {
+    "dev": {
+      "git_param": "BRANCH",           // 环境级：该环境所有项目生效
+      "default_branch": "develop",
+      "projects": [
+        { "name": "project-a" },                       // 使用环境级 BRANCH
+        { "name": "project-b", "git_param": "branch" } // 项目级覆盖，使用 branch
+      ]
+    }
+  }
+}
+```
+
+**规则：**
+- 环境级 `git_param` — 该环境下所有项目默认使用此参数名
+- 项目级 `git_param` — 仅覆盖当前项目，优先级高于环境级
+- 默认值 `"branch"` — 如果都不配置，默认参数名为 `branch`
+
+**原理：** 构建时向 Jenkins 发送 `POST /job/{path}/buildWithParameters`，参数名和值以 form data 形式传递。`git_param` 的值就是 form data 的 key，分支值为 value。
+
+**优先级：** 项目 `git_param` > 环境 `git_param` > `"branch"`（默认）
+
 ### 参数合并优先级
 
 1. 命令行参数（`--params`）

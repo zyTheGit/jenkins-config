@@ -72,6 +72,7 @@ class BuildConfig:
     build_timeout: int = 3600  # 默认 1 小时超时
     curl_timeout: int = 30  # 默认 30 秒 HTTP 超时
     log_dir: str = "./jenkins_logs"  # 默认日志目录
+    log_retention_days: int = 3  # 日志保留天数，超过此天数的旧日志会被清理
 
 
 @dataclass
@@ -92,6 +93,7 @@ class Project:
     path: str = ""  # 默认为空，后续会用 name 填充
     branch: str = ""  # 默认为空，表示使用环境默认分支
     params: dict = field(default_factory=dict)  # 默认空字典
+    git_param: Optional[str] = None  # Git参数名称，None表示使用环境默认值
 
 
 @dataclass
@@ -103,15 +105,18 @@ class Environment:
 
     Attributes:
         name: 环境名称
+        description: 环境描述（可选）
         default_branch: 该环境的默认分支
         params: 环境级别的参数（会被项目参数覆盖）
         projects: 该环境下的项目列表
     """
 
     name: str
+    description: str = ""  # 环境描述，如"开发环境30006"
     default_branch: str = "main"  # 默认分支为 main
     params: dict = field(default_factory=dict)  # 环境级参数
     projects: list[Project] = field(default_factory=list)  # 项目列表
+    git_param: str = "branch"  # 环境级Git参数名称默认值
 
 
 @dataclass
@@ -137,6 +142,7 @@ class Job:
     params: dict
     env: str
     project_name: str = ""
+    git_param: str = "branch"
 
 
 @dataclass
@@ -206,6 +212,7 @@ class Config:
             build_timeout=build_data.get("build_timeout", 3600),
             curl_timeout=build_data.get("curl_timeout", 30),
             log_dir=build_data.get("log_dir", "./jenkins_logs"),
+            log_retention_days=build_data.get("log_retention_days", 3),
         )
 
         # 5. 构建所有环境配置
@@ -226,14 +233,17 @@ class Config:
                         path=proj_data.get("path", proj_data["name"]),
                         branch=proj_data.get("branch", ""),
                         params=proj_params,
+                        git_param=proj_data.get("git_param"),
                     )
                 )
 
             environments[env_name] = Environment(
                 name=env_name,
+                description=env_data.get("description", ""),
                 default_branch=env_data.get("default_branch", "main"),
                 params=env_params,
                 projects=projects,
+                git_param=env_data.get("git_param", "branch"),
             )
 
         # 6. 返回完整的配置对象
@@ -339,11 +349,13 @@ class Config:
 
                 # ------------------------------------------------------------
                 # 参数合并（优先级从低到高）：
-                # 1. 默认分支
-                # 2. 环境参数
-                # 3. 项目参数
+                # 1. Git参数名称（项目 > 环境 > 默认"branch"）
+                # 2. 默认分支
+                # 3. 环境参数
+                # 4. 项目参数
                 # ------------------------------------------------------------
-                merged_params = {"branch": project.branch or env_config.default_branch}
+                git_param = project.git_param or env_config.git_param
+                merged_params = {git_param: project.branch or env_config.default_branch}
                 merged_params.update(env_config.params)  # 环境参数覆盖默认值
                 merged_params.update(project.params)  # 项目参数覆盖环境参数
 
@@ -356,6 +368,7 @@ class Config:
                         params=merged_params,
                         env=env_name,
                         project_name=project.name,
+                        git_param=git_param,
                     )
                 )
 
@@ -365,18 +378,18 @@ class Config:
     # 公共方法：列表查询
     # ========================================================================
 
-    def list_environments(self) -> list[str]:
+    def list_environments(self) -> list[tuple[str, str]]:
         """
-        列出所有环境名称
+        列出所有环境名称和描述
 
         Returns:
-            环境名称列表
+            (环境名称, 环境描述) 元组列表
 
         Example:
             >>> config.list_environments()
-            ['dev', 'test', 'prod']
+            [('dev', '开发环境30006'), ('test', '')]
         """
-        return list(self.environments.keys())
+        return [(name, env.description) for name, env in self.environments.items()]
 
     def list_projects(self, env: Optional[str] = None) -> list[tuple[str, str, str]]:
         """
@@ -402,6 +415,56 @@ class Config:
             for project in env_config.projects:
                 result.append((env_name, project.name, project.path or project.name))
         return result
+
+    @staticmethod
+    def show_template():
+        """
+        打印配置文件模板（含必填/可选说明）
+
+        Example:
+            >>> Config.show_template()
+        """
+        lines = [
+            "=" * 64,
+            "  Jenkins 配置文件模板 (jenkins-config.json)",
+            "=" * 64,
+            "",
+            "  server:    （必填）Jenkins 服务器配置",
+            "    url:     必填  Jenkins 地址，如 http://jenkins:8080",
+            "    token:   必填  API Token",
+            "    username 可选  默认: admin",
+            "",
+            "  build:     （可选）构建行为配置，全部有默认值",
+            "    mode          可选  构建模式: parallel(默认) / sequential",
+            "    poll_interval 可选  轮询间隔秒数 (默认: 10)",
+            "    build_timeout 可选  构建超时秒数 (默认: 3600)",
+            "    curl_timeout  可选  HTTP超时秒数 (默认: 30)",
+            "    log_dir       可选  日志目录 (默认: ./jenkins_logs)",
+            "    log_retention_days  可选  日志保留天数 (默认: 3, 超过自动清理)",
+            "",
+            "  environments:  （必填）环境配置字典",
+            "    <env_name>:",
+            "      default_branch  可选  环境默认分支 (默认: main)",
+            "      description     可选  环境描述，如 '开发环境30006'",
+            "      params          可选  环境级别参数，格式: key=val&key2=val2",
+            "      git_param       可选  Git参数名称 (默认: branch)",
+            "                        用于 git-parameter-plugin 的参数名",
+            "",
+            "      projects:       （必填）项目列表",
+            "        - name:       必填  项目名称，对应 Jenkins Job 名称",
+            "          path:       可选  Job路径 (默认同 name，用于文件夹结构)",
+            "          branch:     可选  构建分支，为空则用 default_branch",
+            "          params:     可选  项目特定参数，格式: key=val&key2=val2",
+            "          git_param:  可选  Git参数名称(默认: branch)",
+            "                        覆盖环境级别 git_param",
+            "",
+            "-" * 64,
+            "  参数合并优先级: CLI参数 -p > 项目 params > 环境 params > 默认值",
+            "  分支优先级:      项目 branch > 环境 default_branch > main",
+            "  Git参数名优先级: 项目 git_param > 环境 git_param > branch",
+            "-" * 64,
+        ]
+        print("\n".join(lines))
 
     def create_job_from_record(self, record: BuildRecord) -> Optional[Job]:
         """
@@ -432,12 +495,13 @@ class Config:
         for project in env_config.projects:
             if project.name == project_name:
                 job_key = f"{record.env}_{project.name.replace('-', '_')}"
+                git_param = project.git_param or env_config.git_param
 
                 if record.branch and record.params:
                     merged_params = dict(record.params)
                 else:
                     merged_params = {
-                        "branch": project.branch or env_config.default_branch
+                        git_param: project.branch or env_config.default_branch
                     }
                     merged_params.update(env_config.params)
                     merged_params.update(project.params)
@@ -449,6 +513,7 @@ class Config:
                     params=merged_params,
                     env=record.env,
                     project_name=project.name,
+                    git_param=git_param,
                 )
 
         return None
