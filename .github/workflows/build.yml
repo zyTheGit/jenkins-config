@@ -71,11 +71,16 @@ jobs:
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
 
+      - name: Prepare release assets with unique names
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          cp jenkins-build-Linux/jenkins-build release-assets/jenkins-build-linux
+          cp jenkins-build-macOS/jenkins-build release-assets/jenkins-build-macos
+          cp jenkins-build-Windows/jenkins-build.exe release-assets/jenkins-build-win.exe
+
       - name: Create Release and upload assets
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            jenkins-build-Linux/**
-            jenkins-build-macOS/**
-            jenkins-build-Windows/**
+          files: release-assets/*
           generate_release_notes: true
