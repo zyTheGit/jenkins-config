@@ -41,7 +41,7 @@ def clean_build():
     print("清理完成！\n")
 
 
-def build_exe(mode='onefile'):
+def build_exe(mode='onefile', args=None):
     """
     打包成 exe
     
@@ -57,8 +57,22 @@ def build_exe(mode='onefile'):
     except ImportError:
         print("正在安装 PyInstaller...")
         subprocess.run([sys.executable, '-m', 'pip', 'install', 'pyinstaller'], check=True)
-    
+
     # 构建 PyInstaller 命令
+    icon_option = []
+    if args and args.icon:
+        icon_path = Path(args.icon)
+        if icon_path.exists():
+            icon_option = ['--icon', str(icon_path)]
+            print(f"使用图标: {icon_path}")
+        else:
+            print(f"警告: 图标文件不存在: {icon_path}，将使用默认图标")
+    else:
+        default_icon = Path("assets/icon.ico")
+        if default_icon.exists():
+            icon_option = ['--icon', str(default_icon)]
+            print(f"使用图标: {default_icon}")
+
     if mode == 'onefile':
         # 单文件模式
         cmd = [
@@ -67,6 +81,8 @@ def build_exe(mode='onefile'):
             '--console',           # 控制台程序
             '--name', 'jenkins-build',  # 输出文件名
             '--clean',             # 清理临时文件
+            # 自定义图标
+            *icon_option,
             # 隐藏导入
             '--hidden-import', 'requests',
             '--hidden-import', 'questionary',
@@ -92,6 +108,8 @@ def build_exe(mode='onefile'):
             '--console',           # 控制台程序
             '--name', 'jenkins-build',  # 输出目录名
             '--clean',             # 清理临时文件
+            # 自定义图标
+            *icon_option,
             '--hidden-import', 'requests',
             '--hidden-import', 'questionary',
             '--hidden-import', 'prompt_toolkit',
@@ -152,6 +170,10 @@ def main():
         action='store_true',
         help='使用目录模式（启动更快，但文件较多）'
     )
+    parser.add_argument(
+        '--icon',
+        help='自定义 exe 图标路径（.ico 文件），默认使用 assets/icon.ico'
+    )
     
     args = parser.parse_args()
     
@@ -163,7 +185,7 @@ def main():
         clean_build()
     
     mode = 'dir' if args.dir else 'onefile'
-    build_exe(mode)
+    build_exe(mode, args)
 
 
 if __name__ == '__main__':
