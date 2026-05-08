@@ -35,4 +35,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['C:\\zy\\project_other\\jenkins-config\\assets\\logo.ico'],
 )
