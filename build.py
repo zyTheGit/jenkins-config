@@ -32,11 +32,10 @@ def clean_build():
             shutil.rmtree(dir_name)
             print(f"  已删除: {dir_name}/")
     
-    # 删除 .spec 文件生成的临时文件
+    # 删除所有 .spec 文件，确保下次打包使用最新配置（特别是图标变更）
     for spec_file in Path('.').glob('*.spec'):
-        if spec_file.name != 'jenkins-build.spec':
-            spec_file.unlink()
-            print(f"  已删除: {spec_file}")
+        spec_file.unlink()
+        print(f"  已删除: {spec_file}")
     
     print("清理完成！\n")
 
@@ -60,18 +59,27 @@ def build_exe(mode='onefile', args=None):
 
     # 构建 PyInstaller 命令
     icon_option = []
+    icon_source = "PyInstaller 默认"
     if args and args.icon:
         icon_path = Path(args.icon)
         if icon_path.exists():
-            icon_option = ['--icon', str(icon_path)]
-            print(f"使用图标: {icon_path}")
+            icon_option = ['--icon', str(icon_path.absolute())]
+            icon_source = str(icon_path)
+            print(f"使用自定义图标: {icon_path.absolute()}")
         else:
-            print(f"警告: 图标文件不存在: {icon_path}，将使用默认图标")
+            print(f"警告: 图标文件不存在: {icon_path}")
+            # 回退使用默认图标
+            default_icon = Path("assets/logo.ico")
+            if default_icon.exists():
+                icon_option = ['--icon', str(default_icon.absolute())]
+                icon_source = str(default_icon)
+                print(f"回退使用默认图标: {default_icon.absolute()}")
     else:
-        default_icon = Path("assets/icon.ico")
+        default_icon = Path("assets/logo.ico")
         if default_icon.exists():
-            icon_option = ['--icon', str(default_icon)]
-            print(f"使用图标: {default_icon}")
+            icon_option = ['--icon', str(default_icon.absolute())]
+            icon_source = str(default_icon)
+            print(f"使用默认图标: {default_icon.absolute()}")
 
     if mode == 'onefile':
         # 单文件模式
@@ -143,6 +151,7 @@ def build_exe(mode='onefile', args=None):
             size_mb = exe_path.stat().st_size / (1024 * 1024)
             print(f"\n输出文件: {exe_path.absolute()}")
             print(f"文件大小: {size_mb:.2f} MB")
+            print(f"图标来源: {icon_source}")
         
         print("\n使用方法:")
         print(f"  {exe_path} --help")
@@ -172,7 +181,7 @@ def main():
     )
     parser.add_argument(
         '--icon',
-        help='自定义 exe 图标路径（.ico 文件），默认使用 assets/icon.ico'
+        help='自定义 exe 图标路径（.ico 文件），默认使用 assets/logo.ico'
     )
     
     args = parser.parse_args()
