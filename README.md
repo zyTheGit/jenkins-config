@@ -12,21 +12,14 @@
 
 ## 快速开始
 
-### 方式一：使用 Shell 脚本（需要 Python）
+### 方式一：使用 Shell/PowerShell 脚本（需要 Python）
 
 ```bash
-# 克隆项目
-git clone <repo-url>
-cd jenkins-config
-
-# 安装依赖
-uv sync
-
-# 初始化配置文件（按需编辑）
-./jenkins-auto-build.sh --init
-
-# 查看帮助
+# macOS / Linux
 ./jenkins-auto-build.sh --help
+
+# Windows (PowerShell)
+./jenkins-auto-build.ps1 --help
 ```
 
 ### 方式二：使用 EXE（无需 Python）
@@ -62,6 +55,9 @@ uv sync
 # 交互式引导生成配置文件
 ./jenkins-auto-build.sh --init -i
 
+# 强制覆盖已有配置
+./jenkins-auto-build.sh --init --force
+
 # 显示帮助
 ./jenkins-auto-build.sh --help
 
@@ -80,12 +76,27 @@ uv sync
 # 构建指定项目
 ./jenkins-auto-build.sh -j dev:project-a,test:project-b
 
+# 重建上次构建的项目
+./jenkins-auto-build.sh -r
+
 # 查看构建历史
 ./jenkins-auto-build.sh --history
 ./jenkins-auto-build.sh --history-stats
 ```
 
-### 交互式模式
+### `--init` 交互式引导流程
+
+```bash
+./jenkins-auto-build.sh --init -i
+```
+
+通过问答形式逐步生成配置文件，流程如下：
+
+1. **Jenkins 服务器信息** — 输入地址、用户名、API Token
+2. **构建行为配置** — 选择默认配置或自定义（轮询间隔、超时等）
+3. **环境与项目配置** — 逐个添加环境（dev/test/prod），每个环境可添加多个项目，指定分支
+
+### 交互式构建模式
 
 ```bash
 ./jenkins-auto-build.sh -i
@@ -96,6 +107,16 @@ uv sync
 2. 选择要构建的项目（支持多选）
 3. 选择构建模式（并行/顺序）
 4. 确认后开始构建
+
+### 自定义分支与参数
+
+```bash
+# 覆盖配置文件中的分支（所有项目统一使用）
+./jenkins-auto-build.sh -e dev -b feature/new-ui
+
+# 额外传递构建参数
+./jenkins-auto-build.sh -e dev -p "skip_tests=true&notify=false"
+```
 
 ## 打包成 EXE
 
@@ -108,11 +129,14 @@ uv pip install pyinstaller
 ### 打包命令
 
 ```bash
-# 单文件模式（默认，便于分发，约 14 MB）
+# 单文件模式（默认，便于分发，约 15 MB）
 uv run python build.py
 
 # 目录模式（启动更快，文件较多）
 uv run python build.py --dir
+
+# 自定义 exe 图标
+uv run python build.py --icon assets/my-icon.ico
 
 # 清理后重新打包
 uv run python build.py --clean
@@ -180,6 +204,7 @@ jenkins-config/
 {
   "server": {
     "url": "http://jenkins.example.com:8080",
+    "username": "admin",
     "token": "your-api-token"
   },
   "build": {
@@ -187,7 +212,8 @@ jenkins-config/
     "poll_interval": 10,
     "build_timeout": 3600,
     "curl_timeout": 30,
-    "log_dir": "./jenkins_logs"
+    "log_dir": "./jenkins_logs",
+    "log_retention_days": 3
   },
   "environments": {
     "dev": {
@@ -221,13 +247,17 @@ jenkins-config/
 | 字段 | 说明 | 默认值 |
 |------|------|--------|
 | `server.url` | Jenkins 服务器地址 | 必填 |
+| `server.username` | Jenkins 登录用户名 | admin |
 | `server.token` | API Token | 必填 |
 | `build.mode` | 构建模式：parallel/sequential | parallel |
 | `build.poll_interval` | 轮询间隔（秒） | 10 |
 | `build.build_timeout` | 构建超时（秒） | 3600 |
+| `build.curl_timeout` | HTTP 请求超时（秒） | 30 |
 | `build.log_dir` | 日志目录 | ./jenkins_logs |
+| `build.log_retention_days` | 日志保留天数（超过自动清理） | 3 |
 | `environments.*.default_branch` | 默认分支 | main |
 | `environments.*.params` | 环境参数 | - |
+| `environments.*.git_param` | Git 参数插件参数名 | branch |
 
 ### Git 参数配置（git-parameter-plugin）
 
@@ -269,14 +299,19 @@ jenkins-config/
 | 命令 | 说明 |
 |------|------|
 | `--help` | 显示帮助信息 |
+| `--help-config` | 显示配置文件模板（含字段说明） |
 | `--init` | 生成配置文件模板（结合 `-i` 交互式引导） |
 | `--force` | 强制覆盖已存在的配置文件（结合 `--init` 使用） |
 | `-e, --env ENV` | 构建指定环境 |
 | `-j, --jobs JOBS` | 构建指定项目（格式: env:project） |
+| `-b, --branch BRANCH` | 自定义构建分支，覆盖配置中的分支 |
 | `-m, --mode MODE` | 构建模式：parallel/sequential |
-| `-p, --params PARAMS` | 额外构建参数 |
+| `-p, --params PARAMS` | 额外构建参数（格式: key=val&key2=val2） |
 | `-c, --config FILE` | 配置文件路径 |
 | `-i, --interactive` | 交互式选择模式 |
+| `-y, --yes` | 跳过确认直接构建 |
+| `-r, --rebuild-last` | 重建上次构建的项目 |
+| `-d, --debug` | 启用调试模式 |
 | `--list-envs` | 列出所有环境 |
 | `--list-projects [ENV]` | 列出项目 |
 | `--history` | 查看构建历史 |

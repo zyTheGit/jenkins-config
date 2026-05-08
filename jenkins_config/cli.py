@@ -444,7 +444,14 @@ def run_init(config_file: Path, args):
         log_success(f"配置文件模板已生成: {config_file}")
 
     log_info("请编辑配置文件修改服务器地址和 Token 后即可使用")
-    log_info(f"使用 -i 参数进入交互式引导: uv run python -m jenkins_config.cli --init -i")
+    log_info(f"使用 -i 参数进入交互式引导: {_cli_cmd()} --init -i")
+
+
+def _cli_cmd() -> str:
+    """返回当前运行环境下的 CLI 命令名。"""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).name
+    return "uv run python -m jenkins_config.cli"
 
 
 def _run_init_interactive(config_file: Path):
@@ -622,8 +629,8 @@ def _run_init_interactive(config_file: Path):
     log_success(f"配置文件已生成: {config_file}")
     print_sep("-")
     log_info("后续操作:")
-    log_info(f"  1. 验证配置: uv run python -m jenkins_config.cli --list-envs")
-    log_info(f"  2. 开始构建: uv run python -m jenkins_config.cli -i")
+    log_info(f"  1. 验证配置: {_cli_cmd()} --list-envs")
+    log_info(f"  2. 开始构建: {_cli_cmd()} -i")
 
 
 # ============================================================================
