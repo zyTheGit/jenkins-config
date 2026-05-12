@@ -9,4 +9,5 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Set-Location $ScriptDir
 
 # 使用 uv 运行 Python 模块
+Write-Host "[INFO] 正在准备环境..." -ForegroundColor Yellow
 uv run python -m jenkins_config.cli @args

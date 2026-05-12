@@ -12,4 +12,5 @@ fi
 cd "$SCRIPT_DIR"
 
 # 使用 uv 运行 Python 模块
+echo "[INFO] 正在准备环境..." >&2
 exec uv run python -m jenkins_config.cli "$@"
