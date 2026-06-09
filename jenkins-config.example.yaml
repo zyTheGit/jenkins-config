@@ -1,0 +1,61 @@
+# Jenkins 构建工具配置文件
+# 推荐使用 YAML 格式（支持注释）
+# 所有 Jenkins 参数都放在 params 字典中，无需硬编码字段
+# 新增插件参数只需在 params 中添加键值对，无需修改代码
+
+server:
+  url: http://jenkins.example.com:8080   # Jenkins 服务器地址
+  username: admin                         # Jenkins 用户名
+  token: your-api-token-here              # API Token
+
+build:
+  mode: parallel                           # 构建模式: parallel(并行) / sequential(顺序)
+  poll_interval: 10                        # 轮询间隔（秒）
+  build_timeout: 3600                      # 构建超时（秒）
+  curl_timeout: 30                         # HTTP 请求超时（秒）
+  log_dir: ./jenkins_logs                  # 日志目录
+  log_retention_days: 3                    # 日志保留天数
+
+# CLI -b/--branch 使用的参数名（默认: branch）
+# 如果 Jenkins 流水线使用 BRANCH 参数，这里改成 BRANCH
+branch_field: branch
+
+environments:
+  dev:
+    description: 开发环境
+    # 环境级别参数（会被项目参数覆盖）
+    params:
+      branch: develop
+    projects:
+      - name: pms-biz-plan-web
+        # 项目特定参数（覆盖环境同名参数）
+        params:
+          branch: develop
+
+      - name: pms-order-web
+        params:
+          branch: develop
+
+      - name: pms-user-web
+        params:
+          branch: feature/new-ui
+
+  test:
+    description: 测试环境
+    params:
+      branch: test
+    projects:
+      - name: pms-biz-plan-web-test
+      - name: pms-order-web-test
+
+  prod:
+    description: 生产环境
+    params:
+      branch: origin/prod
+    # 环境级别覆盖 branch_field
+    branch_field: BRANCH
+    projects:
+      - name: pms-biz-plan-web-prod
+      - name: pms-order-web-prod
+        params:
+          BRANCH: origin/main

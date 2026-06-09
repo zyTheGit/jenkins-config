@@ -1,49 +1,45 @@
+
+!jenkins-build.spec
+# IDE
+# Project specific
+# PyInstaller
 # Python
-__pycache__/
-*.py[cod]
+# Testing
+# Virtual environments
 *$py.class
+*.egg
+*.egg-info/
+*.py[cod]
 *.so
+*.spec
+*.swo
+*.swp
+.claude
+.codegraph
+.coverage
+.eggs/
+.idea/
+.installed.cfg
+.pytest_cache/
 .Python
+.venv/
+.vscode/
+__pycache__/
 build/
+data/*.json
 develop-eggs/
 dist/
 downloads/
 eggs/
-.eggs/
+ENV/
+htmlcov/
+jenkins_logs/
+jenkins-config.json
+jenkins-config.yaml
 lib/
 lib64/
 parts/
 sdist/
 var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual environments
-.venv/
 venv/
-ENV/
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Project specific
-jenkins_logs/
-data/*.json
-
-jenkins-config.json
-
-# PyInstaller
-*.spec
-!jenkins-build.spec
-.claude
-.codegraph
+wheels/

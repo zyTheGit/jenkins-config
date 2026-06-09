@@ -1,100 +1,15 @@
 # jenkins_config/cli.py
 """
-命令行入口模块 - 提供 CLI 命令解析和交互式界面
+命令行入口模块
 
-这个模块是整个工具的入口点，主要功能：
-1. 解析命令行参数（argparse）
-2. 提供交互式选择界面（questionary）
-3. 协调各个模块完成构建流程
-4. 输出构建报告
-
-支持的命令：
-- 初始化：--init（生成配置文件模板，结合 -i 交互式引导）
-- 构建命令：-e, -j, -m, -p 等参数
-- 列表命令：--list-envs, --list-projects
-- 历史命令：--history, --history-stats
-- 交互模式：-i, --interactive
-
-使用示例：
-    # 显示帮助
-    uv run python -m jenkins_config.cli --help
-    # 或使用包装脚本：
-    #   ./jenkins-auto-build.sh --help       (macOS/Linux)
-    #   .\\jenkins-auto-build.ps1 --help     (Windows)
-
-    # 生成配置文件模板
-    uv run python -m jenkins_config.cli --init
-
-    # 交互式引导生成配置文件
-    uv run python -m jenkins_config.cli --init -i
-
-    # 列出所有环境
-    uv run python -m jenkins_config.cli --list-envs
-
-    # 构建指定环境
-    uv run python -m jenkins_config.cli -e dev
-
-    # 构建指定项目
-    uv run python -m jenkins_config.cli -j dev:project-a,test:project-b
-
-    # 交互式选择
-    uv run python -m jenkins_config.cli -i
+这是整个工具的入口点，负责解析命令行参数并分发到各命令模块。
 """
 
-import argparse
-import json
-import shutil
 import sys
-from datetime import datetime, timedelta
 from pathlib import Path
 
-# questionary 库提供交互式终端界面
-import questionary
-from questionary import Style
-
-# 导入项目内部模块
-from .config import Config, BuildConfig
-from .jenkins import JenkinsClient
-from .builder import Builder, BuildResult
-from .history import HistoryManager, BuildRecord
-from .jenkins import BuildStatus
-from .utils import (
-    log_info,
-    log_success,
-    log_error,
-    log_warn,
-    log_debug,
-    print_sep,
-    print_header,
-    format_duration,
-    set_debug_mode,
-    is_debug_mode,
-)
-
-
-# ============================================================================
-# 交互式界面样式配置
-# ============================================================================
-
-# 自定义 questionary 样式，控制颜色和显示效果
-CUSTOM_STYLE = Style(
-    [
-        ("qmark", "fg:cyan bold"),  # 问号标记：青色加粗
-        ("question", "fg:white bold"),  # 问题文本：白色加粗
-        ("answer", "fg:green bold"),  # 答案：绿色加粗
-        ("pointer", "fg:cyan bold"),  # 选择指针：青色加粗
-        ("highlighted", "fg:cyan bold"),  # 高亮选项：青色加粗
-        ("selected", "fg:green"),  # 已选中：绿色
-        ("separator", "fg:gray"),  # 分隔符：灰色
-        ("instruction", "fg:gray"),  # 操作提示：灰色
-        ("text", "fg:white"),  # 普通文本：白色
-    ]
-)
-
-
-# ============================================================================
-# 主入口函数
-# ============================================================================
+from .config import Config
+from .utils import log_info, log_warn, set_debug_mode, log_debug
 
 
 def main():
@@ -102,73 +17,71 @@ def main():
     CLI 主入口函数
 
     解析命令行参数，根据参数调用相应的功能函数。
-    这是整个工具的入口点，在 pyproject.toml 中配置为：
-    [project.scripts]
-    jenkins-build = "jenkins_config.cli:main"
+    在 pyproject.toml 中注册为：
+        [project.scripts]
+        jenkins-build = "jenkins_config.cli:main"
     """
-    # ------------------------------------------------------------------------
-    # 创建参数解析器
-    # ------------------------------------------------------------------------
+    import argparse
+
     parser = argparse.ArgumentParser(
         description="Jenkins 自动构建工具",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    # ------------------------------------------------------------------------
     # 构建参数
-    # ------------------------------------------------------------------------
     parser.add_argument(
-        "-m",
-        "--mode",
+        "-m", "--mode",
         choices=["parallel", "sequential"],
         default="parallel",
         help="构建模式：parallel（并行）或 sequential（顺序）",
     )
     parser.add_argument("-e", "--env", help="构建指定环境的所有项目")
     parser.add_argument(
-        "-j", "--jobs", help="构建指定项目，格式: env:project,env:project"
+        "-j", "--jobs",
+        help="构建指定项目，格式: env:project,env:project",
     )
     parser.add_argument(
-        "-p", "--params", help="额外构建参数，格式: key=value&key2=value2"
+        "-p", "--params",
+        help="额外构建参数，格式: key=value&key2=value2",
     )
     parser.add_argument(
-        "-b", "--branch", help="自定义构建分支，覆盖配置文件中的默认分支"
+        "-b", "--branch",
+        help="自定义构建分支，覆盖配置文件中的默认分支",
     )
     parser.add_argument(
-        "-c",
-        "--config",
-        default="jenkins-config.json",
-        help="配置文件路径（默认: jenkins-config.json）",
+        "-c", "--config",
+        default="jenkins-config.yaml",
+        help="配置文件路径（默认: jenkins-config.yaml，也支持 .json）",
     )
     parser.add_argument(
-        "-i", "--interactive", action="store_true", help="交互式选择要构建的项目"
+        "-i", "--interactive",
+        action="store_true",
+        help="交互式选择要构建的项目",
     )
-    parser.add_argument("-y", "--yes", action="store_true", help="跳过确认直接执行构建")
+    parser.add_argument(
+        "-y", "--yes",
+        action="store_true",
+        help="跳过确认直接执行构建",
+    )
 
-    # ------------------------------------------------------------------------
     # 列表命令
-    # ------------------------------------------------------------------------
     parser.add_argument("--list-envs", action="store_true", help="列出所有环境")
     parser.add_argument(
         "--list-projects",
         metavar="ENV",
         nargs="?",
-        const="",  # 不带参数时使用空字符串
+        const="",
         help="列出项目，不指定 ENV 则列出所有",
     )
 
-    # ------------------------------------------------------------------------
     # 历史命令
-    # ------------------------------------------------------------------------
     parser.add_argument("--history", action="store_true", help="查看构建历史")
     parser.add_argument("--history-stats", action="store_true", help="查看历史统计")
     parser.add_argument(
         "-r", "--rebuild-last", action="store_true", help="重建上次构建的项目"
     )
 
-    # ------------------------------------------------------------------------
     # 其他选项
-    # ------------------------------------------------------------------------
     parser.add_argument("-d", "--debug", action="store_true", help="调试模式")
     parser.add_argument(
         "--help-config",
@@ -176,11 +89,10 @@ def main():
         help="显示配置文件模板（含必填/可选字段说明）",
     )
 
-    # ------------------------------------------------------------------------
     # 初始化命令
-    # ------------------------------------------------------------------------
     parser.add_argument(
-        "--init", action="store_true", help="生成配置文件模板（结合 -i 交互式引导）"
+        "--init", action="store_true",
+        help="生成配置文件模板（结合 -i 交互式引导）",
     )
     parser.add_argument(
         "--force",
@@ -188,73 +100,39 @@ def main():
         help="强制覆盖已存在的配置文件（结合 --init 使用）",
     )
 
-    # 解析命令行参数
     args = parser.parse_args()
 
-    # ------------------------------------------------------------------------
-    # 设置调试模式
-    # ------------------------------------------------------------------------
+    # 调试模式
     if args.debug:
         set_debug_mode(True)
         log_debug("调试模式已启用")
 
-    # ------------------------------------------------------------------------
-    # 确定配置文件路径
-    #
-    # 在不同运行环境下处理配置文件路径：
-    # 1. 源码运行：相对于项目根目录
-    # 2. exe 运行：相对于 exe 所在目录或当前工作目录
-    # ------------------------------------------------------------------------
-    config_file = Path(args.config)
+    # 配置文件路径
+    config_file = _resolve_config_path(args.config)
 
-    if not config_file.is_absolute():
-        # 检查是否在 PyInstaller 打包环境中运行
-        # getattr(sys, 'frozen', False) 在 exe 模式下返回 True
-        if getattr(sys, "frozen", False):
-            # exe 模式：优先使用当前工作目录，然后是 exe 所在目录
-            exe_dir = Path(sys.executable).parent
-
-            # 1. 先检查当前工作目录
-            cwd_config = Path.cwd() / args.config
-            if cwd_config.exists():
-                config_file = cwd_config
-            # 2. 再检查 exe 所在目录
-            else:
-                exe_config = exe_dir / args.config
-                if exe_config.exists():
-                    config_file = exe_config
-                else:
-                    # 都不存在，默认使用当前工作目录（会在后续报错）
-                    config_file = cwd_config
-        else:
-            # 源码模式：相对于项目根目录
-            script_dir = Path(__file__).parent.parent
-            config_file = script_dir / args.config
-
-    # ------------------------------------------------------------------------
-    # 根据参数调用相应的功能
-    # ------------------------------------------------------------------------
-
-    # 初始化命令
+    # 分发命令
     if args.init:
+        from .cmd_init import run_init
         run_init(config_file, args)
         return
 
-    # 列表命令
     if args.list_envs:
+        from .cmd_list import list_environments
         list_environments(config_file)
         return
 
     if args.list_projects is not None:
+        from .cmd_list import list_projects
         list_projects(config_file, args.list_projects)
         return
 
-    # 历史命令
     if args.history:
+        from .cmd_list import show_history
         show_history(config_file, args.env)
         return
 
     if args.history_stats:
+        from .cmd_list import show_history_stats
         show_history_stats(config_file)
         return
 
@@ -263,966 +141,60 @@ def main():
         return
 
     if args.rebuild_last:
+        from .cmd_build import run_rebuild_last
         run_rebuild_last(config_file, args)
         return
 
-    # 交互式选择模式
     if args.interactive:
+        from .cmd_interactive import run_interactive_build
         run_interactive_build(config_file, args)
         return
 
-    # 如果没有指定环境或项目，默认构建所有项目
-    # args.env 和 args.jobs 都为 None 时，get_jobs 会返回所有项目
-
-    # 默认：执行构建流程
+    # 默认：执行构建
     try:
+        from .cmd_build import run_build
         run_build(config_file, args)
     except KeyboardInterrupt:
         print("\n")
         log_warn("用户取消操作")
-        sys.exit(130)  # 130 = 128 + SIGINT(2)
+        sys.exit(130)
 
 
-# ============================================================================
-# 列表命令函数
-# ============================================================================
-
-
-def list_environments(config_file: Path):
+def _resolve_config_path(config_arg: str) -> Path:
     """
-    列出所有环境
+    解析配置文件路径
 
-    从配置文件读取并显示所有可用的环境名称。
+    根据运行模式（源码/exe）确定配置文件的绝对路径。
 
     Args:
-        config_file: 配置文件路径
+        config_arg: 用户传入的路径参数
+
+    Returns:
+        配置文件的绝对路径
     """
-    config = Config.load(str(config_file))
-    print_header("所有环境")
-    for env, desc in config.list_environments():
-        if desc:
-            print(f"  - {env} ({desc})")
-        else:
-            print(f"  - {env}")
+    config_file = Path(config_arg)
 
+    if config_file.is_absolute():
+        return config_file
 
-def list_projects(config_file: Path, env: str | None):
-    """
-    列出项目
-
-    显示指定环境或所有环境的项目列表。
-
-    Args:
-        config_file: 配置文件路径
-        env: 环境名称，为空字符串时列出所有环境的项目
-    """
-    config = Config.load(str(config_file))
-
-    if env:
-        # 显示指定环境的项目
-        print_header(f"环境 '{env}' 的项目")
-        for e, name, path in config.list_projects(env):
-            print(f"  - {name} ({path})")
-    else:
-        # 显示所有环境的项目（按环境分组）
-        print_header("所有环境的项目")
-        current_env = None
-        current_desc = ""
-        for e, name, path in config.list_projects():
-            # 环境变化时打印环境标题
-            if e != current_env:
-                desc = config.environments[e].description if e in config.environments else ""
-                header = f"\n[{e}]" if not desc else f"\n[{e}] ({desc})"
-                print(header)
-                current_env = e
-            print(f"  - {name} ({path})")
-
-
-# ============================================================================
-# 历史命令函数
-# ============================================================================
-
-
-def show_history(config_file: Path, env: str | None):
-    """
-    显示构建历史
-
-    查询并显示最近的构建记录。
-
-    Args:
-        config_file: 配置文件路径
-        env: 按环境过滤，为 None 时显示所有
-    """
-    # 历史文件位于配置文件同级目录的 data 子目录
-    history_file = config_file.parent / "data" / "build_history.json"
-    manager = HistoryManager(str(history_file))
-    records = manager.list(env=env, limit=20)
-
-    print_header("构建历史")
-    if not records:
-        print("暂无记录")
-        return
-
-    for r in records:
-        # 成功显示 [OK]，失败显示 [FAIL]
-        status_icon = "[OK]" if r.status == "SUCCESS" else "[FAIL]"
-        print(
-            f"  {status_icon} [{r.timestamp}] {r.job_key} #{r.build_num} - {r.status} ({format_duration(r.duration)})"
-        )
-
-
-def show_history_stats(config_file: Path):
-    """
-    显示历史统计
-
-    显示总构建数、成功数、失败数和成功率。
-
-    Args:
-        config_file: 配置文件路径
-    """
-    history_file = config_file.parent / "data" / "build_history.json"
-    manager = HistoryManager(str(history_file))
-    stats = manager.stats()
-
-    print_header("历史统计")
-    print(f"  总构建数: {stats['total']}")
-    print(f"  成功数: {stats['success']}")
-    print(f"  失败数: {stats['failure']}")
-    print(f"  成功率: {stats['success_rate']}%")
-
-
-# ============================================================================
-# 初始化配置函数
-# ============================================================================
-
-
-def run_init(config_file: Path, args):
-    """
-    初始化配置文件
-
-    生成 jenkins-config.json 配置文件模板。
-    优先使用示例文件（jenkins-config.example.json），
-    结合 -i 参数可进入交互式引导模式。
-
-    Args:
-        config_file: 配置文件路径
-        args: 命令行参数对象
-    """
-    print_header("初始化配置文件")
-
-    # 检查配置文件是否已存在
-    if config_file.exists() and not args.force:
-        log_warn(f"配置文件已存在: {config_file}")
-        try:
-            print("是否覆盖? [y/N]: ", end="", flush=True)
-            response = input().strip().lower()
-            if response not in ("y", "yes"):
-                log_info("已取消")
-                return
-        except (KeyboardInterrupt, EOFError):
-            print()
-            log_info("已取消")
-            return
-
-    # 确保目标目录存在
-    config_file.parent.mkdir(parents=True, exist_ok=True)
-
-    if args.interactive:
-        # 交互式引导模式
-        _run_init_interactive(config_file)
-        return
-
-    # 静默模式：优先使用示例文件，否则用内置模板
-    example_file = config_file.with_name("jenkins-config.example.json")
-    if example_file.exists():
-        shutil.copy2(str(example_file), str(config_file))
-        log_success(f"已从示例文件生成配置: {config_file}")
-    else:
-        template = Config.generate_template()
-        with open(config_file, "w", encoding="utf-8") as f:
-            json.dump(template, f, indent=2, ensure_ascii=False)
-        log_success(f"配置文件模板已生成: {config_file}")
-
-    log_info("请编辑配置文件修改服务器地址和 Token 后即可使用")
-    log_info(f"使用 -i 参数进入交互式引导: {_cli_cmd()} --init -i")
-
-
-def _cli_cmd() -> str:
-    """返回当前运行环境下的 CLI 命令名。"""
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).name
-    return "uv run python -m jenkins_config.cli"
+        # PyInstaller exe 模式
+        exe_dir = Path(sys.executable).parent
 
+        cwd_config = Path.cwd() / config_arg
+        if cwd_config.exists():
+            return cwd_config
 
-def _run_init_interactive(config_file: Path):
-    """
-    交互式引导生成配置文件
+        exe_config = exe_dir / config_arg
+        if exe_config.exists():
+            return exe_config
 
-    通过问答形式逐步引导用户填写服务器信息、构建配置和环境配置。
-
-    Args:
-        config_file: 配置文件路径
-    """
-    print_header("交互式初始化配置")
-
-    # ========================================================================
-    # 1. 服务器配置
-    # ========================================================================
-    log_info("第一步：Jenkins 服务器配置")
-    print_sep("-")
-
-    url = questionary.text(
-        "Jenkins 服务器地址:",
-        default="http://localhost:8080",
-        qmark="*",
-        style=CUSTOM_STYLE,
-    ).ask()
-    if not url:
-        log_warn("已取消")
-        return
-
-    username = questionary.text(
-        "Jenkins 用户名:", default="admin", qmark="*", style=CUSTOM_STYLE
-    ).ask()
-    if username is None:
-        log_warn("已取消")
-        return
-
-    token = questionary.password(
-        "API Token (输入不可见):", qmark="*", style=CUSTOM_STYLE
-    ).ask()
-    if not token:
-        log_warn("已取消")
-        return
-
-    # ========================================================================
-    # 2. 构建配置
-    # ========================================================================
-    print()
-    log_info("第二步：构建行为配置")
-    print_sep("-")
-
-    use_default_build = questionary.confirm(
-        "使用默认构建配置?", default=True, style=CUSTOM_STYLE
-    ).ask()
-
-    if use_default_build:
-        build_conf = BuildConfig()
+        return cwd_config
     else:
-        mode = questionary.select(
-            "构建模式:", choices=["parallel", "sequential"], style=CUSTOM_STYLE
-        ).ask()
-        if not mode:
-            log_warn("已取消")
-            return
+        # 源码模式：相对于项目根目录
+        script_dir = Path(__file__).parent.parent
+        return script_dir / config_arg
 
-        poll_interval = questionary.text(
-            "轮询间隔（秒）:", default="10", style=CUSTOM_STYLE
-        ).ask()
-        build_timeout = questionary.text(
-            "构建超时（秒）:", default="3600", style=CUSTOM_STYLE
-        ).ask()
-        log_dir = questionary.text(
-            "日志目录:", default="./jenkins_logs", style=CUSTOM_STYLE
-        ).ask()
-
-        build_conf = BuildConfig(
-            mode=mode,
-            poll_interval=int(poll_interval) if poll_interval else 10,
-            build_timeout=int(build_timeout) if build_timeout else 3600,
-            log_dir=log_dir or "./jenkins_logs",
-        )
-
-    # ========================================================================
-    # 3. 环境配置
-    # ========================================================================
-    print()
-    log_info("第三步：环境配置")
-    print_sep("-")
-
-    environments = {}
-    add_envs = questionary.confirm(
-        "配置构建环境?", default=True, style=CUSTOM_STYLE
-    ).ask()
-
-    if add_envs:
-        while True:
-            print()
-            print_sep("-")
-            env_name = questionary.text(
-                "环境名称 (如 dev, test, prod):", qmark="*", style=CUSTOM_STYLE
-            ).ask()
-            if not env_name:
-                break
-
-            desc = questionary.text(
-                "环境描述 (如 '开发环境'):", style=CUSTOM_STYLE
-            ).ask()
-            default_branch = questionary.text(
-                "默认 Git 分支:", default="main", style=CUSTOM_STYLE
-            ).ask()
-
-            env_config = {
-                "default_branch": default_branch or "main",
-                "projects": [],
-            }
-            if desc:
-                env_config["description"] = desc
-
-            # 添加项目
-            log_info(f"为环境 '{env_name}' 添加项目（留空结束）:")
-            while True:
-                proj_name = questionary.text(
-                    "  项目名称 (Jenkins Job 名称，留空结束):", style=CUSTOM_STYLE
-                ).ask()
-                if not proj_name:
-                    break
-
-                proj_branch = questionary.text(
-                    f"  构建分支 (留空使用环境默认 '{default_branch}'):",
-                    style=CUSTOM_STYLE,
-                ).ask()
-                proj = {"name": proj_name}
-                if proj_branch:
-                    proj["branch"] = proj_branch
-                env_config["projects"].append(proj)
-
-            if env_config["projects"]:
-                environments[env_name] = env_config
-                log_success(f"环境 '{env_name}' 已添加 ({len(env_config['projects'])} 个项目)")
-            else:
-                log_warn(f"环境 '{env_name}' 没有项目，已跳过")
-
-            if not questionary.confirm(
-                "继续添加下一个环境?", default=True, style=CUSTOM_STYLE
-            ).ask():
-                break
-
-    # ========================================================================
-    # 4. 组装并写入配置
-    # ========================================================================
-    print()
-    print_sep("=")
-
-    config_data = {
-        "server": {
-            "url": url,
-            "username": username,
-            "token": token,
-        },
-        "build": {
-            "mode": build_conf.mode,
-            "poll_interval": build_conf.poll_interval,
-            "build_timeout": build_conf.build_timeout,
-            "curl_timeout": build_conf.curl_timeout,
-            "log_dir": build_conf.log_dir,
-            "log_retention_days": build_conf.log_retention_days,
-        },
-    }
-
-    if environments:
-        config_data["environments"] = environments
-
-    with open(config_file, "w", encoding="utf-8") as f:
-        json.dump(config_data, f, indent=2, ensure_ascii=False)
-
-    log_success(f"配置文件已生成: {config_file}")
-    print_sep("-")
-    log_info("后续操作:")
-    log_info(f"  1. 验证配置: {_cli_cmd()} --list-envs")
-    log_info(f"  2. 开始构建: {_cli_cmd()} -i")
-
-
-# ============================================================================
-# 交互式构建函数
-# ============================================================================
-
-
-def run_interactive_build(config_file: Path, args):
-    """
-    交互式构建选择
-
-    通过交互式界面让用户选择：
-    1. 构建方式（按环境或按项目）
-    2. 要构建的环境/项目
-    3. 构建模式（并行/顺序）
-    4. 确认后执行构建
-
-    Args:
-        config_file: 配置文件路径
-        args: 命令行参数对象
-    """
-    print_header("交互式构建选择")
-
-    # 加载配置
-    try:
-        config = Config.load(str(config_file))
-    except FileNotFoundError as e:
-        log_error(str(e))
-        sys.exit(1)
-
-    # 预初始化 prompt_toolkit（Windows 上首次加载较慢，提前触发）
-    log_info("正在初始化交互界面...")
-    # ========================================================================
-    # 步骤 1：选择构建方式
-    # ========================================================================
-    build_method = questionary.select(
-        "请选择构建方式:",
-        choices=[
-            questionary.Choice(
-                title="按环境构建 - 选择一个环境，然后选择项目", value="by_env"
-            ),
-            questionary.Choice(
-                title="按项目构建 - 从所有项目中多选", value="by_project"
-            ),
-        ],
-        style=CUSTOM_STYLE,
-    ).ask()
-
-    # 用户取消选择
-    if not build_method:
-        log_warn("已取消")
-        sys.exit(0)
-
-    selected_env = None
-    jobs_filter = None
-
-    # ========================================================================
-    # 步骤 2：根据构建方式进行选择
-    # ========================================================================
-
-    if build_method == "by_env":
-        # --------------------------------------------------------------------
-        # 按环境构建：先选环境，再选项目
-        # --------------------------------------------------------------------
-        envs = config.list_environments()
-        if not envs:
-            log_error("没有可用的环境")
-            sys.exit(1)
-
-        # 选择环境
-        env_choices = [
-            questionary.Choice(
-                title=f"{env} ({desc})" if desc else env,
-                value=env,
-            )
-            for env, desc in config.list_environments()
-        ]
-        selected_env = questionary.select(
-            "请选择要构建的环境:", choices=env_choices, style=CUSTOM_STYLE
-        ).ask()
-
-        if not selected_env:
-            log_warn("已取消")
-            sys.exit(0)
-
-        # 获取该环境的项目列表
-        projects = config.list_projects(selected_env)
-        if not projects:
-            log_error(f"环境 '{selected_env}' 没有可用的项目")
-            sys.exit(1)
-
-        # 构建项目选项
-        project_choices = [
-            questionary.Choice(title=f"{name} ({path})", value=f"{selected_env}:{name}")
-            for _, name, path in projects
-        ]
-
-        # 添加"全选"选项
-        all_choice = questionary.Choice(
-            title="【全选】构建该环境所有项目", value="__ALL__"
-        )
-        project_choices.insert(0, all_choice)
-
-        # 多选项目
-        selected_projects = questionary.checkbox(
-            "请选择要构建的项目 (空格选择，回车确认):",
-            choices=project_choices,
-            style=CUSTOM_STYLE,
-        ).ask()
-
-        # 用户按 Esc 或 Ctrl+C 取消
-        if selected_projects is None:
-            log_warn("已取消")
-            sys.exit(0)
-
-        # 没有选择任何项目，提示用户
-        if not selected_projects:
-            log_warn("请至少选择一个项目（使用空格选择，回车确认）")
-            sys.exit(0)
-
-        # 处理全选
-        if "__ALL__" in selected_projects:
-            jobs_filter = None  # 不过滤，获取该环境所有项目
-        else:
-            jobs_filter = selected_projects
-
-    else:
-        # --------------------------------------------------------------------
-        # 按项目构建：从所有项目中选择（跨环境）
-        # --------------------------------------------------------------------
-        all_projects = config.list_projects()
-        if not all_projects:
-            log_error("没有可用的项目")
-            sys.exit(1)
-
-        # 按环境分组显示项目
-        project_choices = []
-        current_env = None
-
-        for env, name, path in all_projects:
-            # 添加环境分隔符
-            if env != current_env:
-                project_choices.append(
-                    questionary.Choice(
-                        title=f"─── [{env}] ───",
-                        disabled=True,  # 不可选
-                        value=f"separator_{env}",
-                    )
-                )
-                current_env = env
-
-            # 添加项目选项
-            project_choices.append(
-                questionary.Choice(title=f"  {name} ({path})", value=f"{env}:{name}")
-            )
-
-        # 多选项目
-        selected_projects = questionary.checkbox(
-            "请选择要构建的项目 (空格选择，回车确认):",
-            choices=project_choices,
-            style=CUSTOM_STYLE,
-        ).ask()
-
-        # 用户按 Esc 或 Ctrl+C 取消
-        if selected_projects is None:
-            log_warn("已取消")
-            sys.exit(0)
-
-        # 没有选择任何项目，提示用户
-        if not selected_projects:
-            log_warn("请至少选择一个项目（使用空格选择，回车确认）")
-            sys.exit(0)
-
-        jobs_filter = selected_projects
-
-    # ========================================================================
-    # 步骤 3：选择构建模式
-    # 如果只有一个工程，直接使用并行模式（单工程并行/顺序无区别）
-    # ========================================================================
-    # 先获取 jobs 来判断工程数量
-    if build_method == "by_env" and jobs_filter is None:
-        jobs = config.get_jobs(env=selected_env)
-    elif build_method == "by_env":
-        jobs = config.get_jobs(env=selected_env, jobs=jobs_filter)
-    else:
-        jobs = config.get_jobs(jobs=jobs_filter)
-
-    if not jobs:
-        log_error("没有找到匹配的项目")
-        sys.exit(1)
-
-    if len(jobs) == 1:
-        build_mode = "parallel"
-        log_info("仅一个构建工程，自动使用并行模式")
-    else:
-        build_mode = questionary.select(
-            "请选择构建模式:",
-            choices=[
-                questionary.Choice(title="并行构建 (同时构建所有项目)", value="parallel"),
-                questionary.Choice(title="顺序构建 (按顺序逐个构建)", value="sequential"),
-            ],
-            style=CUSTOM_STYLE,
-        ).ask()
-
-        if not build_mode:
-            log_warn("已取消")
-            sys.exit(0)
-
-    # ========================================================================
-    # 步骤 4：确认构建
-    # ========================================================================
-    print()
-    print_sep("-")
-    print(f"即将构建以下 {len(jobs)} 个项目:")
-    print_sep("-")
-    for job in jobs:
-        print(f"  - [{job.env}] {job.key} ({job.path}) - 分支: {job.branch}")
-    print_sep("-")
-
-    confirm = questionary.confirm(
-        "确认开始构建?", default=True, style=CUSTOM_STYLE
-    ).ask()
-
-    if not confirm:
-        log_warn("已取消")
-        sys.exit(0)
-
-    # ========================================================================
-    # 步骤 5：执行构建
-    # ========================================================================
-    print()
-    args.env = selected_env
-    args.mode = build_mode
-    args.jobs = ",".join(jobs_filter) if jobs_filter else None
-    args.branch = None
-    args.yes = True  # 交互模式已确认，跳过 run_build 中的确认
-
-    # 调用构建流程
-    run_build(config_file, args)
-
-
-# ============================================================================
-# 构建执行函数
-# ============================================================================
-
-
-# ============================================================================
-# 日志清理函数
-# ============================================================================
-
-
-def _cleanup_old_logs(log_dir: str, retention_days: int):
-    """
-    清理超过保留天数的旧日志目录
-
-    扫描日志根目录下的 build_YYYYMMDD/ 子目录，删除日期早于
-    当前时间减去保留天数的目录。
-
-    Args:
-        log_dir: 日志根目录
-        retention_days: 保留天数
-    """
-    log_root = Path(log_dir)
-    if not log_root.exists():
-        return
-
-    cutoff = datetime.now() - timedelta(days=retention_days)
-    cutoff_str = cutoff.strftime("%Y%m%d")
-    cleaned = 0
-
-    for dir_path in sorted(log_root.iterdir()):
-        if not dir_path.is_dir():
-            continue
-        # 匹配 build_YYYYMMDD 格式的目录
-        if not dir_path.name.startswith("build_"):
-            continue
-        date_part = dir_path.name[len("build_"):]
-        if len(date_part) != 8 or not date_part.isdigit():
-            continue
-        if date_part < cutoff_str:
-            shutil.rmtree(dir_path)
-            log_info(f"已清理旧日志目录: {dir_path}")
-            cleaned += 1
-
-    if cleaned > 0:
-        log_info(f"共清理 {cleaned} 个旧日志目录（保留 {retention_days} 天内的日志）")
-
-
-def run_rebuild_last(config_file: Path, args):
-    """
-    重建上次构建的项目
-
-    从历史记录中获取最近一次构建的所有项目，使用相同的参数重新构建
-
-    Args:
-        config_file: 配置文件路径
-        args: 命令行参数对象
-    """
-    print_header("重建上次构建")
-
-    config = Config.load(str(config_file))
-    history_file = config_file.parent / "data" / "build_history.json"
-    manager = HistoryManager(str(history_file))
-
-    last_group = manager.get_last_build_group()
-
-    if not last_group:
-        log_error("没有找到上次成功构建的记录")
-        sys.exit(1)
-
-    print_sep("-")
-    print(f"上次构建时间: {last_group[0].timestamp}")
-    print(f"将要重建的项目 (共 {len(last_group)} 个):")
-    print_sep("-")
-
-    jobs = []
-    for record in last_group:
-        job = config.create_job_from_record(record)
-        if job:
-            jobs.append(job)
-            print(f"  - [{record.env}] {record.job_key} #{record.build_num}")
-            if record.branch:
-                print(f"      分支: {record.branch}")
-        else:
-            log_warn(f"项目 '{record.project_name}' 在配置中不存在，跳过")
-
-    print_sep("-")
-    print()
-
-    if not jobs:
-        log_error("没有可重建的项目")
-        sys.exit(1)
-
-    if not getattr(args, "yes", False):
-        try:
-            print("是否确认开始重建? [Y/n]: ", end="", flush=True)
-            response = input().strip().lower()
-            if response not in ("", "y", "yes"):
-                log_warn("已取消重建")
-                sys.exit(0)
-        except (KeyboardInterrupt, EOFError):
-            print("\n")
-            log_warn("已取消重建")
-            sys.exit(130)
-
-    # 清理旧日志
-    _cleanup_old_logs(config.build.log_dir, config.build.log_retention_days)
-
-    log_dir = Path(config.build.log_dir) / f"build_{datetime.now().strftime('%Y%m%d')}"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_info(f"日志目录: {log_dir}")
-
-    client = JenkinsClient(
-        url=config.server.url,
-        username=config.server.username,
-        token=config.server.token,
-        timeout=config.build.curl_timeout,
-    )
-    builder = Builder(client, config)
-
-    if args.mode == "parallel":
-        results = builder.build_parallel(jobs, str(log_dir))
-    else:
-        results = builder.build_sequential(jobs, str(log_dir))
-
-    for result in results:
-        job = next((j for j in jobs if j.key == result.job_key), None)
-        manager.add(
-            BuildRecord(
-                timestamp=datetime.now().isoformat(timespec="seconds"),
-                env=job.env if job else "",
-                job_key=result.job_key,
-                build_num=result.build_num,
-                status=result.status.value,
-                duration=result.duration,
-                log_file=result.log_file,
-                branch=result.branch,
-                params=result.params,
-                project_name=result.project_name,
-            )
-        )
-
-    generate_report(results, str(log_dir))
-
-
-def run_build(config_file: Path, args):
-    """
-    执行构建流程
-
-    这是构建的核心流程：
-    1. 加载配置
-    2. 获取要构建的 jobs
-    3. 创建 Jenkins 客户端和构建器
-    4. 执行构建（并行或顺序）
-    5. 保存历史记录
-    6. 生成报告
-
-    Args:
-        config_file: 配置文件路径
-        args: 命令行参数对象
-    """
-    print_header("Jenkins 自动构建脚本")
-    print(f"构建模式: {args.mode}")
-    print(f"开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print()
-
-    # ------------------------------------------------------------------------
-    # 加载配置
-    # ------------------------------------------------------------------------
-    try:
-        config = Config.load(str(config_file))
-    except FileNotFoundError as e:
-        log_error(str(e))
-        sys.exit(1)
-
-    # ------------------------------------------------------------------------
-    # 获取要构建的 jobs
-    # ------------------------------------------------------------------------
-    # 解析 -j 参数
-    jobs_filter = args.jobs.split(",") if args.jobs else None
-    jobs = config.get_jobs(env=args.env, jobs=jobs_filter)
-
-    if not jobs:
-        log_error("没有找到匹配的项目")
-        sys.exit(1)
-
-    # ------------------------------------------------------------------------
-    # 覆盖分支参数
-    # -b 参数指定的分支会覆盖所有 job 的默认分支
-    # ------------------------------------------------------------------------
-    if getattr(args, "branch", None):
-        custom_branch = args.branch
-        log_info(f"使用自定义分支: {custom_branch}")
-        for job in jobs:
-            job.branch = custom_branch
-            job.params[job.git_param] = custom_branch
-
-    # ------------------------------------------------------------------------
-    # 显示将要构建的项目并确认
-    # ------------------------------------------------------------------------
-    print_sep("-")
-    print(f"将要构建的 Job (共 {len(jobs)} 个):")
-    print_sep("-")
-    for job in jobs:
-        print(f"  - [{job.env}] {job.key}: {job.path} (分支: {job.branch})")
-    print_sep("-")
-    print()
-
-    # 如果没有指定 --yes 参数，需要确认
-    if not getattr(args, "yes", False):
-        try:
-            # 使用简单的 input 而不是 questionary，更可靠
-            print("是否确认开始构建? [Y/n]: ", end="", flush=True)
-            response = input().strip().lower()
-
-            if response not in ("", "y", "yes"):
-                log_warn("已取消构建")
-                sys.exit(0)
-        except (KeyboardInterrupt, EOFError):
-            print("\n")
-            log_warn("已取消构建")
-            sys.exit(130)
-
-    # ------------------------------------------------------------------------
-    # 清理旧日志
-    # ------------------------------------------------------------------------
-    _cleanup_old_logs(config.build.log_dir, config.build.log_retention_days)
-
-    # ------------------------------------------------------------------------
-    # 创建日志目录
-    # 按日期创建子目录，如 jenkins_logs/build_20260320/
-    # ------------------------------------------------------------------------
-    log_dir = Path(config.build.log_dir) / f"build_{datetime.now().strftime('%Y%m%d')}"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_info(f"日志目录: {log_dir}")
-
-    # ------------------------------------------------------------------------
-    # 覆盖参数
-    # -p 参数指定的参数会覆盖配置文件中的参数
-    # ------------------------------------------------------------------------
-    if args.params:
-        override_params = Config._parse_params(args.params)
-        for job in jobs:
-            job.params.update(override_params)
-
-    # ------------------------------------------------------------------------
-    # 创建客户端和构建器
-    # ------------------------------------------------------------------------
-    client = JenkinsClient(
-        url=config.server.url,
-        username=config.server.username,
-        token=config.server.token,
-        timeout=config.build.curl_timeout,
-    )
-    builder = Builder(client, config)
-
-    # ------------------------------------------------------------------------
-    # 执行构建
-    # ------------------------------------------------------------------------
-    if args.mode == "parallel":
-        results = builder.build_parallel(jobs, str(log_dir))
-    else:
-        results = builder.build_sequential(jobs, str(log_dir))
-
-    # ------------------------------------------------------------------------
-    # 保存历史记录
-    # ------------------------------------------------------------------------
-    history_file = config_file.parent / "data" / "build_history.json"
-    manager = HistoryManager(str(history_file))
-
-    for result in results:
-        job = next((j for j in jobs if j.key == result.job_key), None)
-        manager.add(
-            BuildRecord(
-                timestamp=datetime.now().isoformat(timespec="seconds"),
-                env=job.env if job else "",
-                job_key=result.job_key,
-                build_num=result.build_num,
-                status=result.status.value,
-                duration=result.duration,
-                log_file=result.log_file,
-                branch=result.branch,
-                params=result.params,
-                project_name=result.project_name,
-            )
-        )
-
-    # ------------------------------------------------------------------------
-    # 生成报告
-    # ------------------------------------------------------------------------
-    generate_report(results, str(log_dir))
-
-
-# ============================================================================
-# 报告生成函数
-# ============================================================================
-
-
-def generate_report(results: list[BuildResult], log_dir: str):
-    """
-    生成构建结果报告
-
-    显示构建统计和详细结果。
-
-    Args:
-        results: 构建结果列表
-        log_dir: 日志目录路径
-    """
-    print_header("构建结果汇总")
-
-    # 统计
-    total = len(results)
-    success = sum(1 for r in results if r.status == BuildStatus.SUCCESS)
-    failure = total - success
-
-    print(f"总计: {total} 个 Job")
-    print(f"成功: {success} 个")
-    print(f"失败: {failure} 个")
-    print()
-
-    # 详细结果
-    print_sep("-")
-    print("详细结果:")
-    print_sep("-")
-
-    for result in results:
-        # 根据状态显示不同的图标和颜色
-        if result.status == BuildStatus.SUCCESS:
-            print(f"  [OK] {result.job_key}: SUCCESS (#{result.build_num})")
-        elif result.status == BuildStatus.FAILURE:
-            print(f"  [FAIL] {result.job_key}: FAILURE (#{result.build_num})")
-        elif result.status == BuildStatus.ABORTED:
-            print(f"  [ABORT] {result.job_key}: ABORTED (#{result.build_num})")
-        elif result.status == BuildStatus.TIMEOUT:
-            print(f"  [TIMEOUT] {result.job_key}: TIMEOUT (#{result.build_num})")
-        else:
-            print(
-                f"  [?] {result.job_key}: {result.status.value} (#{result.build_num})"
-            )
-
-    print_sep("-")
-    print(f"日志目录: {log_dir}")
-    print_sep("=")
-
-    # 如果有失败的，返回非零退出码
-    if failure > 0:
-        sys.exit(1)
-
-
-# ============================================================================
-# 入口点
-# ============================================================================
 
 if __name__ == "__main__":
     main()
