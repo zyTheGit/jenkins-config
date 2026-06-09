@@ -46,3 +46,4 @@ jenkins-config.json
 *.spec
 !jenkins-build.spec
 .claude
+.codegraph
