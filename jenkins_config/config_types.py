@@ -6,8 +6,9 @@
 """
 
 from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from .history import BuildRecord
@@ -130,3 +131,34 @@ class Config:
     build: BuildConfig = field(default_factory=BuildConfig)
     branch_field: str = "branch"
     environments: dict[str, Environment] = field(default_factory=dict)
+
+    # 以下方法在 config.py 中通过猴子补丁添加，此处仅为类型检查器提供签名
+    if TYPE_CHECKING:
+        @staticmethod
+        def show_template() -> None: ...
+
+        @staticmethod
+        def generate_template() -> dict: ...
+
+        @classmethod
+        def load(cls, path: str) -> Config: ...
+
+        def save(self, path: str) -> None: ...
+
+        def to_dict(self) -> dict: ...
+
+        def get_jobs(
+            self,
+            env: Optional[str] = None,
+            jobs: Optional[list[str]] = None,
+        ) -> list[Job]: ...
+
+        def list_environments(self) -> list[tuple[str, str]]: ...
+
+        def list_projects(
+            self, env: Optional[str] = None
+        ) -> list[tuple[str, str, str]]: ...
+
+        def create_job_from_record(
+            self, record: BuildRecord
+        ) -> Optional[Job]: ...

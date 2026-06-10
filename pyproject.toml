@@ -26,3 +26,8 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["jenkins_config"]
+
+[dependency-groups]
+dev = [
+    "pytest-cov>=7.1.0",
+]

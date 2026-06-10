@@ -310,6 +310,34 @@ def test_get_jobs_with_filter(tmp_path):
     assert jobs[0].project_name == "project-a"
 
 
+def test_get_jobs_with_filter_by_name_only(tmp_path):
+    """只按项目名过滤（不指定环境）"""
+    config_file = tmp_path / "test.yaml"
+    config_file.write_text(
+        "server:\n"
+        '  url: "http://localhost:8080"\n'
+        '  token: "token"\n'
+        "environments:\n"
+        "  dev:\n"
+        "    params:\n"
+        '      branch: "develop"\n'
+        "    projects:\n"
+        '      - name: project-a\n'
+        "  test:\n"
+        "    params:\n"
+        '      branch: "test"\n'
+        "    projects:\n"
+        '      - name: project-a\n'
+    )
+
+    config = Config.load(str(config_file))
+    jobs = config.get_jobs(jobs=["project-a"])
+
+    # 两个环境都有 project-a
+    assert len(jobs) == 2
+    assert all(j.project_name == "project-a" for j in jobs)
+
+
 # ============================================================================
 # 参数解析
 # ============================================================================
@@ -352,3 +380,6 @@ def test_parse_params_string(tmp_path):
 
     config = Config.load(str(config_file))
     assert config.environments["dev"].params == {"key1": "value1", "key2": "value2"}
+
+
+

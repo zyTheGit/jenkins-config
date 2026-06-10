@@ -6,24 +6,29 @@
 """
 
 from __future__ import annotations
-from typing import Optional, TYPE_CHECKING
 
-# 重新导出所有类型
-from .config_types import (
-    Config,
-    ServerConfig,
-    BuildConfig,
-    Project,
-    Environment,
-    Job,
-)
+from typing import TYPE_CHECKING, Optional
 
 from .config_io import (
-    load_config as _load_config,
-    save_config as _save_config,
     config_to_dict,
     generate_template,
     show_template,
+)
+from .config_io import (
+    load_config as _load_config,
+)
+from .config_io import (
+    save_config as _save_config,
+)
+
+# 重新导出所有类型
+from .config_types import (
+    BuildConfig,
+    Config,
+    Environment,
+    Job,
+    Project,
+    ServerConfig,
 )
 
 if TYPE_CHECKING:
@@ -34,11 +39,11 @@ if TYPE_CHECKING:
 # 将 I/O 方法附加到 Config 类（保持 Config.load() 调用方式不变）
 # ============================================================================
 
-Config.load = classmethod(lambda cls, path: _load_config(path))
-Config.save = lambda self, path: _save_config(self, path)
-Config.to_dict = lambda self: config_to_dict(self)
-Config.generate_template = staticmethod(lambda: generate_template())
-Config.show_template = staticmethod(lambda: show_template())
+Config.load = classmethod(lambda cls, path: _load_config(path))  # type: ignore[assignment]
+Config.save = lambda self, path: _save_config(self, path)  # type: ignore[assignment]
+Config.to_dict = lambda self: config_to_dict(self)  # type: ignore[assignment]
+Config.generate_template = staticmethod(lambda: generate_template())  # type: ignore[assignment]
+Config.show_template = staticmethod(lambda: show_template())  # type: ignore[assignment]
 
 
 # ============================================================================
