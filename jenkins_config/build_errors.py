@@ -3,6 +3,8 @@
 构建错误处理模块 - 错误日志生成和错误信息提取
 """
 
+from __future__ import annotations
+
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
