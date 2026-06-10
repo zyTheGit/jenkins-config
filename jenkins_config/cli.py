@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from .config import Config
-from .utils import log_info, log_warn, set_debug_mode, log_debug
+from .utils import log_debug, log_info, log_warn, set_debug_mode
 
 
 def main():
@@ -50,8 +50,8 @@ def main():
     )
     parser.add_argument(
         "-c", "--config",
-        default="jenkins-config.yaml",
-        help="配置文件路径（默认: jenkins-config.yaml，也支持 .json）",
+        default="",
+        help="配置文件路径（默认自动检测 jenkins-config.yaml / .json）",
     )
     parser.add_argument(
         "-i", "--interactive",
@@ -108,7 +108,8 @@ def main():
         log_debug("调试模式已启用")
 
     # 配置文件路径
-    config_file = _resolve_config_path(args.config)
+    config_file = _resolve_config(args.config)
+    log_info(f"使用配置文件: {config_file}")
 
     # 分发命令
     if args.init:
@@ -160,40 +161,50 @@ def main():
         sys.exit(130)
 
 
-def _resolve_config_path(config_arg: str) -> Path:
+def _resolve_config(config_arg: str) -> Path:
     """
     解析配置文件路径
 
-    根据运行模式（源码/exe）确定配置文件的绝对路径。
+    如果 config_arg 为空，自动检测 jenkins-config.yaml / jenkins-config.json。
+    支持源码和 PyInstaller exe 两种运行模式。
 
     Args:
-        config_arg: 用户传入的路径参数
+        config_arg: 用户传入的路径参数，为空时自动检测
 
     Returns:
         配置文件的绝对路径
     """
-    config_file = Path(config_arg)
+    if config_arg:
+        # 用户明确指定了路径
+        path = Path(config_arg)
+        if path.is_absolute():
+            return path
+        return _resolve_relative(path)
 
-    if config_file.is_absolute():
-        return config_file
+    # 自动检测：优先 .yaml，降级 .json
+    for name in ("jenkins-config.yaml", "jenkins-config.yml", "jenkins-config.json"):
+        path = _resolve_relative(Path(name))
+        if path.exists():
+            return path
 
+    # 都不存在，返回 yaml 路径以便报错
+    return _resolve_relative(Path("jenkins-config.yaml"))
+
+
+def _resolve_relative(config_file: Path) -> Path:
+    """根据运行模式解析相对路径"""
     if getattr(sys, "frozen", False):
-        # PyInstaller exe 模式
-        exe_dir = Path(sys.executable).parent
-
-        cwd_config = Path.cwd() / config_arg
+        # PyInstaller exe 模式：cwd 优先，再试 exe 目录
+        cwd_config = Path.cwd() / config_file
         if cwd_config.exists():
             return cwd_config
-
-        exe_config = exe_dir / config_arg
+        exe_config = Path(sys.executable).parent / config_file
         if exe_config.exists():
             return exe_config
-
         return cwd_config
     else:
         # 源码模式：相对于项目根目录
-        script_dir = Path(__file__).parent.parent
-        return script_dir / config_arg
+        return Path(__file__).parent.parent / config_file
 
 
 if __name__ == "__main__":

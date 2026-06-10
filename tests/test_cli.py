@@ -9,38 +9,37 @@ CLI 入口模块测试
 
 import sys
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from jenkins_config.cli import _resolve_config_path, main
-
+from jenkins_config.cli import _resolve_config, main
 
 # ============================================================================
-# _resolve_config_path
+# _resolve_config
 # ============================================================================
 
 
 def test_resolve_absolute_path(tmp_path):
     """绝对路径直接返回"""
     abs_path = str(tmp_path / "config.yaml")
-    result = _resolve_config_path(abs_path)
+    result = _resolve_config(abs_path)
     assert result == Path(abs_path)
 
 
-def test_resolve_relative_source(tmp_path):
-    """源码模式相对路径解析到项目根目录"""
+def test_resolve_specified_relative_source(tmp_path):
+    """指定相对路径解析到项目根目录"""
     fake_cli = str(tmp_path / "jenkins_config" / "cli.py")
     with (
         patch("jenkins_config.cli.sys.frozen", False, create=True),
         patch("jenkins_config.cli.__file__", fake_cli),
     ):
-        result = _resolve_config_path("jenkins-config.yaml")
+        result = _resolve_config("jenkins-config.yaml")
         expected = tmp_path / "jenkins-config.yaml"
         assert result == expected
 
 
-def test_resolve_relative_frozen_cwd_exists(tmp_path):
+def test_resolve_specified_relative_frozen_cwd_exists(tmp_path):
     """EXE 模式：当前目录有配置文件则用当前目录"""
     config_arg = "jenkins-config.yaml"
     config_in_cwd = tmp_path / config_arg
@@ -52,11 +51,11 @@ def test_resolve_relative_frozen_cwd_exists(tmp_path):
         patch("jenkins_config.cli.sys.executable",
               str(tmp_path / "dist" / "jenkins-build.exe")),
     ):
-        result = _resolve_config_path(config_arg)
+        result = _resolve_config(config_arg)
         assert result == config_in_cwd
 
 
-def test_resolve_relative_frozen_cwd_missing(tmp_path):
+def test_resolve_specified_relative_frozen_cwd_missing(tmp_path):
     """EXE 模式：当前目录无配置，exe 目录有则用 exe 目录"""
     config_arg = "jenkins-config.yaml"
     exe_dir = tmp_path / "dist"
@@ -70,11 +69,11 @@ def test_resolve_relative_frozen_cwd_missing(tmp_path):
         patch("jenkins_config.cli.sys.executable",
               str(exe_dir / "jenkins-build.exe")),
     ):
-        result = _resolve_config_path(config_arg)
+        result = _resolve_config(config_arg)
         assert result == config_in_exe
 
 
-def test_resolve_relative_frozen_both_missing(tmp_path):
+def test_resolve_specified_relative_frozen_both_missing(tmp_path):
     """EXE 模式：两处都无配置，回退到当前目录"""
     config_arg = "jenkins-config.yaml"
     exe_dir = tmp_path / "dist"
@@ -86,8 +85,44 @@ def test_resolve_relative_frozen_both_missing(tmp_path):
         patch("jenkins_config.cli.sys.executable",
               str(exe_dir / "jenkins-build.exe")),
     ):
-        result = _resolve_config_path(config_arg)
+        result = _resolve_config(config_arg)
         assert result == tmp_path / config_arg
+
+
+def test_resolve_auto_detect_yaml(tmp_path):
+    """空参数时优先检测 .yaml"""
+    fake_cli = str(tmp_path / "jenkins_config" / "cli.py")
+    (tmp_path / "jenkins-config.yaml").write_text("dummy", encoding="utf-8")
+    (tmp_path / "jenkins-config.json").write_text("{}", encoding="utf-8")
+    with (
+        patch("jenkins_config.cli.sys.frozen", False, create=True),
+        patch("jenkins_config.cli.__file__", fake_cli),
+    ):
+        result = _resolve_config("")
+        assert result == tmp_path / "jenkins-config.yaml"
+
+
+def test_resolve_auto_detect_json_fallback(tmp_path):
+    """空参数时 .yaml 不存在则降级到 .json"""
+    fake_cli = str(tmp_path / "jenkins_config" / "cli.py")
+    (tmp_path / "jenkins-config.json").write_text("{}", encoding="utf-8")
+    with (
+        patch("jenkins_config.cli.sys.frozen", False, create=True),
+        patch("jenkins_config.cli.__file__", fake_cli),
+    ):
+        result = _resolve_config("")
+        assert result == tmp_path / "jenkins-config.json"
+
+
+def test_resolve_auto_detect_nonexistent(tmp_path):
+    """空参数时两者都不存在，返回 yaml 路径"""
+    fake_cli = str(tmp_path / "jenkins_config" / "cli.py")
+    with (
+        patch("jenkins_config.cli.sys.frozen", False, create=True),
+        patch("jenkins_config.cli.__file__", fake_cli),
+    ):
+        result = _resolve_config("")
+        assert result == tmp_path / "jenkins-config.yaml"
 
 
 # ============================================================================
