@@ -99,6 +99,7 @@ def build_exe(mode='onefile', args=None):
             '--hidden-import', 'prompt_toolkit.output',
             '--hidden-import', 'prompt_toolkit.styles',
             '--hidden-import', 'wcwidth',
+            '--hidden-import', 'yaml',
             # 排除不需要的模块
             '--exclude-module', 'tkinter',
             '--exclude-module', 'matplotlib',
@@ -125,6 +126,7 @@ def build_exe(mode='onefile', args=None):
             '--hidden-import', 'prompt_toolkit.output',
             '--hidden-import', 'prompt_toolkit.styles',
             '--hidden-import', 'wcwidth',
+            '--hidden-import', 'yaml',
             '--exclude-module', 'tkinter',
             '--exclude-module', 'matplotlib',
             '--exclude-module', 'numpy',
@@ -160,8 +162,8 @@ def build_exe(mode='onefile', args=None):
         print(f"  {exe_path} --list-envs # 列出所有环境")
         
         print("\n注意:")
-        print("  - 首次运行需要将 jenkins-config.json 放在 exe 同级目录")
-        print("  - 或使用 -c 参数指定配置文件路径")
+        print("  - 首次运行需要将 jenkins-config.yaml 放在 exe 同级目录")
+        print("  - 也可使用 -c 参数指定配置文件路径（支持 .yaml / .json）")
     else:
         print("\n打包失败！请检查错误信息。")
         sys.exit(1)
