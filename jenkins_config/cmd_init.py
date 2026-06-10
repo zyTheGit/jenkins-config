@@ -9,12 +9,13 @@ import shutil
 import sys
 from pathlib import Path
 
-import yaml
 import questionary
+import yaml
 from questionary import Style
 
-from .config import Config, BuildConfig
-from .utils import log_info, log_success, log_error, log_warn, print_header, print_sep
+from .config import Config
+from .config_types import BuildConfig
+from .utils import log_error, log_info, log_success, log_warn, print_header, print_sep
 
 CUSTOM_STYLE = Style(
     [

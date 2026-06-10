@@ -12,7 +12,7 @@ import questionary
 from questionary import Style
 
 from .config import Config
-from .utils import log_info, log_error, log_warn, print_header, print_sep
+from .utils import log_error, log_info, log_warn, print_header, print_sep
 
 CUSTOM_STYLE = Style(
     [
@@ -146,7 +146,7 @@ def run_interactive_build(config_file: Path, args):
                 project_choices.append(
                     questionary.Choice(
                         title=f"─── [{env}] ───",
-                        disabled=True,
+                        disabled="disabled",
                         value=f"separator_{env}",
                     )
                 )

@@ -6,16 +6,18 @@
 """
 
 from __future__ import annotations
+
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 from .config_types import (
-    Config,
-    ServerConfig,
     BuildConfig,
+    Config,
     Environment,
     Project,
+    ServerConfig,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,7 +62,7 @@ def load_config(config_path: str) -> Config:
     return _from_dict(data)
 
 
-def _from_dict(data: dict) -> Config:
+def _from_dict(data: dict[str, Any]) -> Config:
     """从字典构建 Config 对象"""
     # ServerConfig
     server_data = data.get("server", {})
@@ -99,7 +101,7 @@ def _from_dict(data: dict) -> Config:
 
 
 def _build_environment(
-    env_name: str, env_data: dict, global_branch_field: str
+    env_name: str, env_data: dict[str, Any], global_branch_field: str
 ) -> Environment:
     """
     构建 Environment 对象（含向后兼容）
@@ -148,8 +150,8 @@ def _build_environment(
 
 
 def _build_project(
-    proj_data: dict,
-    env_params: dict,
+    proj_data: dict[str, Any],
+    env_params: dict[str, Any],
     effective_branch_field: str,
     env_name: str,
 ) -> Project:
@@ -188,7 +190,7 @@ def _build_project(
     )
 
 
-def _parse_params_field(params_value) -> dict:
+def _parse_params_field(params_value: object) -> dict[str, Any]:
     """
     解析参数字段，支持新旧两种格式
 
@@ -196,11 +198,11 @@ def _parse_params_field(params_value) -> dict:
     旧格式: "BRANCH=develop&skip_tests=false"
     """
     if isinstance(params_value, dict):
-        return params_value
+        return {str(k): v for k, v in params_value.items()}
     if isinstance(params_value, str):
         if not params_value.strip():
             return {}
-        result = {}
+        result: dict[str, Any] = {}
         for pair in params_value.split("&"):
             if "=" in pair:
                 k, v = pair.split("=", 1)
@@ -240,7 +242,7 @@ def save_config(config: Config, path: str):
         )
 
 
-def config_to_dict(config: Config) -> dict:
+def config_to_dict(config: Config) -> dict[str, Any]:
     """将 Config 对象序列化为字典"""
     environments = {}
     for env_name, env in config.environments.items():
@@ -282,9 +284,9 @@ def config_to_dict(config: Config) -> dict:
     return result
 
 
-def _project_to_dict(p: Project) -> dict:
+def _project_to_dict(p: Project) -> dict[str, Any]:
     """将 Project 转为字典（移除 None 值）"""
-    d = {"name": p.name}
+    d: dict[str, Any] = {"name": p.name}
     if p.path and p.path != p.name:
         d["path"] = p.path
     if p.params:
@@ -297,7 +299,7 @@ def _project_to_dict(p: Project) -> dict:
 # ============================================================================
 
 
-def generate_template() -> dict:
+def generate_template() -> dict[str, Any]:
     """生成最小配置文件模板字典"""
     return {
         "server": {

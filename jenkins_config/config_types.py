@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from .history import BuildRecord
@@ -68,7 +68,7 @@ class Project:
 
     name: str
     path: str = ""
-    params: dict = field(default_factory=dict)
+    params: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -87,7 +87,7 @@ class Environment:
     name: str
     description: str = ""
     branch_field: str = ""
-    params: dict = field(default_factory=dict)
+    params: dict[str, Any] = field(default_factory=dict)
     projects: list[Project] = field(default_factory=list)
 
 
@@ -138,14 +138,14 @@ class Config:
         def show_template() -> None: ...
 
         @staticmethod
-        def generate_template() -> dict: ...
+        def generate_template() -> dict[str, Any]: ...
 
         @classmethod
         def load(cls, path: str) -> Config: ...
 
         def save(self, path: str) -> None: ...
 
-        def to_dict(self) -> dict: ...
+        def to_dict(self) -> dict[str, Any]: ...
 
         def get_jobs(
             self,

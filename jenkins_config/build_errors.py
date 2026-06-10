@@ -96,7 +96,7 @@ def save_error_log(
     return error_log_file
 
 
-def extract_error_lines(log_content: str, max_lines: int = 50) -> list[str]:
+def extract_error_lines(log_content: str | None, max_lines: int = 50) -> list[str]:
     """
     从日志中提取错误行
 
