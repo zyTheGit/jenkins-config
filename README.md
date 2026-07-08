@@ -26,7 +26,7 @@
 
 ```bash
 # 直接下载 dist/jenkins-build.exe
-# 将 jenkins-config.json 放在 exe 同级目录
+# 将 jenkins-config.yaml 放在 exe 同级目录
 
 jenkins-build.exe --help
 ```
@@ -155,7 +155,7 @@ dist/
 
 ### EXE 使用说明
 
-1. 将 `jenkins-config.json` 放在 exe 同级目录
+1. 将 `jenkins-config.yaml` 放在 exe 同级目录
 2. 或使用 `-c` 参数指定配置文件路径
 
 ```bash
@@ -163,7 +163,7 @@ dist/
 jenkins-build.exe --list-envs
 
 # 指定配置文件路径
-jenkins-build.exe -c /path/to/config.json --list-envs
+jenkins-build.exe -c /path/to/config.yaml --list-envs
 ```
 
 ## 项目结构
@@ -171,25 +171,30 @@ jenkins-build.exe -c /path/to/config.json --list-envs
 ```
 jenkins-config/
 ├── jenkins-auto-build.sh       # Shell 入口（Python 包装器）
+├── jenkins-auto-build.ps1      # PowerShell 入口
 ├── pyproject.toml              # Python 项目配置
-├── jenkins-config.json         # 配置文件
-├── jenkins-config.example.json # 配置示例
+├── jenkins-config.yaml         # 配置文件（默认）
+├── jenkins-config.example.yaml # 配置示例（YAML，推荐）
+├── jenkins-config.example.json # 配置示例（JSON，兼容）
 ├── build.py                    # PyInstaller 打包脚本
 ├── entry_point.py              # EXE 入口点
 ├── jenkins_config/             # Python 包
 │   ├── __init__.py
 │   ├── cli.py                  # CLI 入口
-│   ├── config.py               # 配置加载
+│   ├── cmd_build.py            # 构建执行
+│   ├── cmd_init.py             # 配置初始化
+│   ├── cmd_interactive.py      # 交互式选择
+│   ├── cmd_list.py             # 列表查询
+│   ├── config_types.py         # 配置数据类型（纯 dataclass）
+│   ├── config_io.py            # 配置 I/O（YAML/JSON 加载、保存）
+│   ├── config.py               # 配置业务方法（猴子补丁）
+│   ├── builder.py              # 构建编排（并行/顺序）
 │   ├── jenkins.py              # Jenkins API 客户端
-│   ├── builder.py              # 构建编排
-│   ├── history.py              # 历史记录
+│   ├── history.py              # 构建历史
+│   ├── build_result.py         # 构建结果数据类
+│   ├── build_errors.py         # 错误日志生成
 │   └── utils.py                # 工具函数
 ├── tests/                      # 测试套件
-│   ├── test_config.py
-│   ├── test_jenkins.py
-│   ├── test_builder.py
-│   ├── test_history.py
-│   └── test_utils.py
 ├── data/                       # 数据目录
 │   └── build_history.json      # 构建历史
 └── dist/                       # 打包输出
@@ -198,48 +203,58 @@ jenkins-config/
 
 ## 配置文件格式
 
+默认使用 YAML 格式（支持注释），JSON 格式仍兼容。
+
 ### 完整示例
 
-```json
-{
-  "server": {
-    "url": "http://jenkins.example.com:8080",
-    "username": "admin",
-    "token": "your-api-token"
-  },
-  "build": {
-    "mode": "parallel",
-    "poll_interval": 10,
-    "build_timeout": 3600,
-    "curl_timeout": 30,
-    "log_dir": "./jenkins_logs",
-    "log_retention_days": 3
-  },
-  "environments": {
-    "dev": {
-      "default_branch": "develop",
-      "params": "skip_tests=false",
-      "projects": [
-        {
-          "name": "project-a",
-          "path": "folder/project-a",
-          "branch": "feature",
-          "params": "debug=true"
-        },
-        {
-          "name": "project-b"
-        }
-      ]
-    },
-    "test": {
-      "default_branch": "main",
-      "projects": [
-        { "name": "project-a" },
-        { "name": "project-b" }
-      ]
-    }
-  }
-}
+```yaml
+server:
+  url: "http://jenkins.example.com:8080"
+  username: admin
+  token: "your-api-token"
+
+# branch_field: CLI -b 使用的参数名，默认 "branch"
+branch_field: BRANCH
+
+build:
+  mode: parallel
+  poll_interval: 10
+  build_timeout: 3600
+  curl_timeout: 30
+  log_dir: ./jenkins_logs
+  log_retention_days: 3
+
+environments:
+  dev:
+    description: 开发环境
+    params:
+      BRANCH: develop
+    projects:
+      - name: project-a
+        path: folder/project-a     # 可选，默认等于 name
+        params:
+          BRANCH: feature
+          SKIP_TESTS: "true"
+      - name: project-b
+
+  test:
+    description: 测试环境
+    params:
+      BRANCH: test
+    projects:
+      - name: project-a
+      - name: project-b
+
+  prod:
+    description: 生产环境
+    branch_field: BRANCH           # 环境级覆盖 branch_field
+    projects:
+      - name: project-a-prod
+        params:
+          BRANCH: prod
+      - name: project-b-prod
+        params:
+          BRANCH: main
 ```
 
 ### 配置说明
@@ -249,50 +264,42 @@ jenkins-config/
 | `server.url` | Jenkins 服务器地址 | 必填 |
 | `server.username` | Jenkins 登录用户名 | admin |
 | `server.token` | API Token | 必填 |
+| `branch_field` | CLI `-b` 使用的参数名 | branch |
 | `build.mode` | 构建模式：parallel/sequential | parallel |
 | `build.poll_interval` | 轮询间隔（秒） | 10 |
 | `build.build_timeout` | 构建超时（秒） | 3600 |
 | `build.curl_timeout` | HTTP 请求超时（秒） | 30 |
 | `build.log_dir` | 日志目录 | ./jenkins_logs |
 | `build.log_retention_days` | 日志保留天数（超过自动清理） | 3 |
-| `environments.*.default_branch` | 默认分支 | main |
-| `environments.*.params` | 环境参数 | - |
-| `environments.*.git_param` | Git 参数插件参数名 | branch |
+| `environments.*.branch_field` | 环境级覆盖 branch_field | 继承全局 |
+| `environments.*.params` | 环境参数（dict） | - |
+| `environments.*.projects[].params` | 项目参数（dict，覆盖环境参数） | - |
 
-### Git 参数配置（git-parameter-plugin）
+### branch_field 与参数体系
 
-如果你的 Jenkins Job 使用了 `git-parameter-plugin` 插件，需要通过 `git_param` 指定插件定义的参数名。
+所有 Jenkins 构建参数通过 `params: dict` 传递，无需硬编码字段：
 
-```json
-{
-  "environments": {
-    "dev": {
-      "git_param": "BRANCH",           // 环境级：该环境所有项目生效
-      "default_branch": "develop",
-      "projects": [
-        { "name": "project-a" },                       // 使用环境级 BRANCH
-        { "name": "project-b", "git_param": "branch" } // 项目级覆盖，使用 branch
-      ]
-    }
-  }
-}
+- **`Config.branch_field`** — 全局默认值 `"branch"`，告诉 CLI `-b` 应覆盖哪个参数 key
+- **`Environment.branch_field`** — 环境级覆盖，优先级高于全局
+- **`Job.branch`** — 由 `get_jobs()` 从 `params[branch_field]` 派生，不是独立字段
+
+```yaml
+# 全局 branch_field 为 BRANCH
+branch_field: BRANCH
+
+environments:
+  dev:
+    params:
+      BRANCH: develop        # Job.branch = "develop"
+    projects:
+      - name: project-a
+        params:
+          BRANCH: feature    # 项目级覆盖，Job.branch = "feature"
 ```
 
-**规则：**
-- 环境级 `git_param` — 该环境下所有项目默认使用此参数名
-- 项目级 `git_param` — 仅覆盖当前项目，优先级高于环境级
-- 默认值 `"branch"` — 如果都不配置，默认参数名为 `branch`
+**参数合并优先级：** CLI `-p` > 项目 `params` > 环境 `params`（简单 `dict.update()` 链）
 
-**原理：** 构建时向 Jenkins 发送 `POST /job/{path}/buildWithParameters`，参数名和值以 form data 形式传递。`git_param` 的值就是 form data 的 key，分支值为 value。
-
-**优先级：** 项目 `git_param` > 环境 `git_param` > `"branch"`（默认）
-
-### 参数合并优先级
-
-1. 命令行参数（`--params`）
-2. 项目参数（`projects[].params`）
-3. 环境参数（`environments.xxx.params`）
-4. 默认值
+**向后兼容：** 旧 JSON 配置中的 `branch`、`git_param`、`default_branch` 字段仍可加载，会自动转换并输出弃用警告。`params` 同时支持 dict 格式（`{BRANCH: develop}`）和旧字符串格式（`"BRANCH=develop&skip_tests=false"`）。
 
 ## CLI 命令参考
 
@@ -325,6 +332,9 @@ uv run pytest tests/ -v
 
 # 运行单个测试文件
 uv run pytest tests/test_config.py -v
+
+# 带覆盖率
+uv run pytest tests/ --cov=jenkins_config --cov-report=term-missing -v
 ```
 
 ## 架构说明
@@ -332,27 +342,21 @@ uv run pytest tests/test_config.py -v
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                         cli.py                               │
-│                    (命令行入口)                               │
+│                    (命令行入口，懒加载 cmd_*)                 │
 └─────────────────────────────────────────────────────────────┘
                               │
         ┌─────────────────────┼─────────────────────┐
         ▼                     ▼                     ▼
 ┌───────────────┐   ┌───────────────┐   ┌───────────────┐
-│   config.py   │   │  builder.py   │   │  history.py   │
-│  (配置加载)   │   │  (构建编排)   │   │  (历史记录)   │
-└───────────────┘   └───────────────┘   └───────────────┘
-        │                     │
-        │                     ▼
-        │           ┌───────────────┐
-        │           │  jenkins.py   │
-        │           │ (Jenkins API) │
-        │           └───────────────┘
-        │
-        ▼
-┌───────────────┐
-│   utils.py    │
-│  (工具函数)   │
-└───────────────┘
+│ config_types  │   │  builder.py   │   │  history.py   │
+│ config_io     │   │  (构建编排)   │   │  (历史记录)   │
+│ config.py     │   └───────────────┘   └───────────────┘
+│ (配置加载)    │           │
+└───────────────┘           ▼
+                    ┌───────────────┐
+                    │  jenkins.py   │
+                    │ (Jenkins API) │
+                    └───────────────┘
 ```
 
 ## 故障排除
@@ -360,7 +364,7 @@ uv run pytest tests/test_config.py -v
 ### 配置文件不存在
 
 ```
-错误：配置文件不存在: jenkins-config.json
+错误：配置文件不存在: jenkins-config.yaml
 ```
 
 解决：使用 `--init` 快速生成配置文件模板，或使用 `-c` 参数指定已有配置路径。
@@ -378,6 +382,14 @@ uv run pytest tests/test_config.py -v
 EXE 模式下，配置文件查找顺序：
 1. 当前工作目录
 2. EXE 所在目录
+
+### Jenkins 触发构建返回 400
+
+Jenkins 返回 400（Bad Request）通常是因为参数值不合法：
+
+- **Pipeline 项目**使用 `git-parameter-plugin` 时，插件会验证分支值是否在仓库中存在
+- 分支值不要带 `origin/` 前缀，使用 `prod` 而不是 `origin/prod`
+- FreeStyle 项目不做验证，但建议统一不带 `origin/` 前缀
 
 ### Jenkins 连接失败
 
