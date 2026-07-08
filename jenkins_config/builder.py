@@ -105,7 +105,7 @@ class Builder:
         Path(log_dir).mkdir(parents=True, exist_ok=True)
 
         # 步骤 1：触发构建
-        queue_url = self.client.trigger_build(job.path, job.params)
+        queue_url, trigger_diagnostic = self.client.trigger_build(job.path, job.params)
 
         if not queue_url:
             log_error(f"触发构建失败：{job.key}")
@@ -114,6 +114,8 @@ class Builder:
                 job,
                 error_type="trigger_failed",
                 error_msg="触发构建失败 - Jenkins POST 请求未返回队列 URL",
+                base_url=self.client.base_url,
+                extra_info=trigger_diagnostic,
             )
             return BuildResult(
                 job_key=job.key,

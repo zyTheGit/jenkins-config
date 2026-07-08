@@ -95,7 +95,7 @@ class JenkinsClient:
 
     Example:
         >>> client = JenkinsClient("http://jenkins.example.com", "api_token")
-        >>> queue_url = client.trigger_build("my-project", {"branch": "main"})
+        >>> queue_url, _ = client.trigger_build("my-project", {"branch": "main"})
         >>> build_num = client.get_build_number(queue_url)
         >>> status = client.get_build_status("my-project", build_num)
     """
@@ -167,7 +167,9 @@ class JenkinsClient:
     # 公共方法：触发构建
     # ========================================================================
 
-    def trigger_build(self, job_path: str, params: dict) -> Optional[str]:
+    def trigger_build(
+        self, job_path: str, params: dict
+    ) -> tuple[Optional[str], str]:
         """
         触发 Jenkins 构建
 
@@ -178,8 +180,9 @@ class JenkinsClient:
             params: 构建参数字典，如 {"branch": "main", "skip_tests": "true"}
 
         Returns:
-            队列项 URL，如 "http://jenkins/queue/item/123/"
-            如果触发失败返回 None
+            元组 (queue_url, diagnostic):
+              - queue_url: 队列项 URL，如 "http://jenkins/queue/item/123/"，失败时为 None
+              - diagnostic: 诊断信息（请求 URL、状态码、响应内容），成功时为空字符串
 
         Note:
             - 返回的 URL 用于查询构建编号（get_build_number）
@@ -187,13 +190,13 @@ class JenkinsClient:
             - HTTP 201 表示请求成功，队列项 URL 在 Location 头中
 
         Example:
-            >>> url = client.trigger_build("my-project", {"branch": "develop"})
+            >>> url, diag = client.trigger_build("my-project", {"branch": "develop"})
             >>> print(url)
             http://jenkins.example.com/queue/item/456/
         """
         # URL 编码 Job 路径（处理特殊字符和中文）
-        # safe="" 表示所有字符都编码（包括 /）
-        encoded_path = quote(job_path, safe="")
+        # safe="-_.~" 保留 RFC 3986 未保留字符，Jenkins Job 名称中常见
+        encoded_path = quote(job_path, safe="-_.~")
 
         # 构建完整 URL
         url = f"{self.base_url}/job/{encoded_path}/buildWithParameters"
@@ -230,13 +233,19 @@ class JenkinsClient:
                 # 队列项 URL 在 Location 头中
                 queue_url = resp.headers.get("Location")
                 log_debug(f"队列 URL: {queue_url}")
-                return queue_url
+                return queue_url, ""
             else:
                 log_debug(f"触发失败，响应内容: {resp.text[:500]}")
+                diagnostic = (
+                    f"请求URL: {url}\n"
+                    f"状态码: {resp.status_code}\n"
+                    f"响应内容: {resp.text[:500]}"
+                )
+                return None, diagnostic
         except Exception as e:
             log_debug(f"触发异常: {e}")
-
-        return None
+            diagnostic = f"请求URL: {url}\n异常: {e}"
+            return None, diagnostic
 
     # ========================================================================
     # 公共方法：获取构建编号
@@ -327,7 +336,7 @@ class JenkinsClient:
             60  # 60秒
         """
         # URL 编码并构建 API URL
-        encoded_path = quote(job_path, safe="")
+        encoded_path = quote(job_path, safe="-_.~")
         url = f"{self.base_url}/job/{encoded_path}/{build_num}/api/json"
 
         log_debug(f"查询构建状态: {url}")
@@ -394,7 +403,7 @@ class JenkinsClient:
             >>> print(log[:100])  # 打印前 100 个字符
             Started by user admin...
         """
-        encoded_path = quote(job_path, safe="")
+        encoded_path = quote(job_path, safe="-_.~")
         url = f"{self.base_url}/job/{encoded_path}/{build_num}/consoleText"
 
         log_debug(f"获取构建日志: {url}")

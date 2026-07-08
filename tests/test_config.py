@@ -114,7 +114,7 @@ def test_params_add_new_key(tmp_path):
         "    projects:\n"
         "      - name: project-a\n"
         "        params:\n"
-        '          BRANCH: "origin/prod"\n'
+        '          BRANCH: "prod"\n'
         '          APP_VERSION: "1.2.3"\n'  # 新插件参数
         '          SKIP_TESTS: "true"\n'     # 新插件参数
     )
@@ -123,7 +123,7 @@ def test_params_add_new_key(tmp_path):
     jobs = config.get_jobs(env="dev")
 
     assert len(jobs) == 1
-    assert jobs[0].params["BRANCH"] == "origin/prod"
+    assert jobs[0].params["BRANCH"] == "prod"
     assert jobs[0].params["APP_VERSION"] == "1.2.3"
     assert jobs[0].params["SKIP_TESTS"] == "true"
 
@@ -173,7 +173,7 @@ def test_branch_field_custom(tmp_path):
         "    projects:\n"
         '      - name: project-a\n'
         "        params:\n"
-        '          BRANCH: "origin/prod"\n'
+        '          BRANCH: "prod"\n'
     )
 
     config = Config.load(str(config_file))
@@ -181,8 +181,8 @@ def test_branch_field_custom(tmp_path):
 
     assert len(jobs) == 1
     assert config.branch_field == "BRANCH"
-    assert jobs[0].branch == "origin/prod"
-    assert jobs[0].params["BRANCH"] == "origin/prod"
+    assert jobs[0].branch == "prod"
+    assert jobs[0].params["BRANCH"] == "prod"
 
 
 def test_branch_field_env_override(tmp_path):

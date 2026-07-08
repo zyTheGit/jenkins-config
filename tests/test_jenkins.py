@@ -26,8 +26,9 @@ def test_trigger_build_success(client):
         mock_response.headers = {"Location": "http://localhost:8080/queue/item/123/"}
         mock_post.return_value = mock_response
 
-        result = client.trigger_build("test-job", {"branch": "main"})
+        result, diagnostic = client.trigger_build("test-job", {"branch": "main"})
         assert result == "http://localhost:8080/queue/item/123/"
+        assert diagnostic == ""
 
 
 def test_get_build_number(client):
@@ -64,10 +65,13 @@ def test_trigger_build_non_201(client):
     with patch.object(client.session, "post") as mock_post:
         mock_response = Mock()
         mock_response.status_code = 403
+        mock_response.text = "Forbidden"
+        mock_response.headers = {}
         mock_post.return_value = mock_response
 
-        result = client.trigger_build("test-job", {"branch": "main"})
+        result, diagnostic = client.trigger_build("test-job", {"branch": "main"})
         assert result is None
+        assert "403" in diagnostic
 
 
 def test_trigger_build_network_error(client):
@@ -75,8 +79,9 @@ def test_trigger_build_network_error(client):
     with patch.object(client.session, "post") as mock_post:
         mock_post.side_effect = Exception("Connection refused")
 
-        result = client.trigger_build("test-job", {"branch": "main"})
+        result, diagnostic = client.trigger_build("test-job", {"branch": "main"})
         assert result is None
+        assert "Connection refused" in diagnostic
 
 
 def test_get_build_number_cancelled(client):
@@ -219,10 +224,12 @@ def test_trigger_build_with_crumb_debug(client):
                 mock_response = Mock()
                 mock_response.status_code = 403
                 mock_response.text = "Forbidden"
+                mock_response.headers = {}
                 mock_post.return_value = mock_response
 
-                result = client.trigger_build("test-job", {"branch": "main"})
+                result, diagnostic = client.trigger_build("test-job", {"branch": "main"})
                 assert result is None  # 403 触发 debug 日志（line 235）
+                assert "403" in diagnostic
     finally:
         set_debug_mode(False)
 
@@ -263,7 +270,8 @@ def test_trigger_build_success_with_crumb_and_debug(client):
                 }
                 mock_post.return_value = mock_response
 
-                result = client.trigger_build("test-job", {"branch": "main"})
+                result, diagnostic = client.trigger_build("test-job", {"branch": "main"})
                 assert result == "http://localhost:8080/queue/item/1/"
+                assert diagnostic == ""
     finally:
         set_debug_mode(False)

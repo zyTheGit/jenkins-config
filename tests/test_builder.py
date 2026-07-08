@@ -14,7 +14,8 @@ from jenkins_config.jenkins import BuildStatus, JenkinsClient
 @pytest.fixture
 def mock_client():
     client = Mock(spec=JenkinsClient)
-    client.trigger_build.return_value = "http://localhost/queue/item/1/"
+    client.trigger_build.return_value = ("http://localhost/queue/item/1/", "")
+    client.base_url = "http://localhost:8080"
     client.get_build_number.return_value = 123
     client.get_build_status.return_value = Mock(
         status=BuildStatus.SUCCESS,
@@ -64,7 +65,7 @@ def test_build_parallel(builder, tmp_path):
 
 def test_build_trigger_failure(builder, tmp_path):
     """触发失败时返回 FAILURE 状态"""
-    builder.client.trigger_build.return_value = None
+    builder.client.trigger_build.return_value = (None, "请求URL: http://localhost:8080/job/bad-job/buildWithParameters\n状态码: 404\n响应内容: Not Found")
     job = Job(key="dev_app", path="bad-job", branch="main", params={}, env="dev")
 
     result = builder._build_single(job, str(tmp_path))
@@ -173,7 +174,8 @@ def test_build_intermediate_building(builder, tmp_path):
 def builder_short_timeout():
     """带短超时的构建器"""
     client = Mock(spec=JenkinsClient)
-    client.trigger_build.return_value = "http://localhost/queue/item/1/"
+    client.trigger_build.return_value = ("http://localhost/queue/item/1/", "")
+    client.base_url = "http://localhost:8080"
     client.get_build_number.return_value = 99
     config = Mock(spec=Config)
     config.build = BuildConfig(build_timeout=1, poll_interval=3600)
