@@ -60,7 +60,7 @@
         },
         {
           "name": "pms-order-web-prod",
-          "branch": "prod",
+          "branch": "origin/prod",
           "git_param": "BRANCH"
         }
       ]

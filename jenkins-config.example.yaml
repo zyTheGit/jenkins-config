@@ -51,11 +51,11 @@ environments:
   prod:
     description: 生产环境
     params:
-      branch: prod
+      branch: origin/prod
     # 环境级别覆盖 branch_field
     branch_field: BRANCH
     projects:
       - name: pms-biz-plan-web-prod
       - name: pms-order-web-prod
         params:
-          BRANCH: main
+          BRANCH: origin/main

@@ -387,9 +387,10 @@ EXE 模式下，配置文件查找顺序：
 
 Jenkins 返回 400（Bad Request）通常是因为参数值不合法：
 
-- **Pipeline 项目**使用 `git-parameter-plugin` 时，插件会验证分支值是否在仓库中存在
-- 分支值不要带 `origin/` 前缀，使用 `prod` 而不是 `origin/prod`
-- FreeStyle 项目不做验证，但建议统一不带 `origin/` 前缀
+- **Pipeline 项目**（WorkflowJob）的 `git-parameter-plugin` 不接受 `origin/` 前缀的分支值
+- **FreeStyle 项目**（FreeStyleProject）需要 `origin/` 前缀
+
+**自动处理**：`trigger_build()` 会自动检测 Job 类型，Pipeline 项目自动去掉 `origin/` 前缀。YAML 中统一写 `origin/prod` 即可，无需手动区分。
 
 ### Jenkins 连接失败
 

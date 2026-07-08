@@ -164,6 +164,42 @@ class JenkinsClient:
         return None
 
     # ========================================================================
+    # 私有方法：Job 类型检测
+    # ========================================================================
+
+    def _is_pipeline_job(self, job_path: str) -> bool:
+        """
+        检测 Job 是否为 Pipeline 类型
+
+        Pipeline 项目 (WorkflowJob) 的 git-parameter-plugin 不接受 origin/ 前缀，
+        FreeStyle 项目 (FreeStyleProject) 需要 origin/ 前缀。
+
+        通过一次轻量 GET 请求查询 Job 的 _class 字段判断类型。
+
+        Args:
+            job_path: Jenkins Job 路径
+
+        Returns:
+            True 表示 Pipeline 项目（需要去掉 origin/ 前缀）
+            False 表示 FreeStyle 或查询失败（保留原始值）
+        """
+        encoded_path = quote(job_path, safe="-_.~")
+        url = f"{self.base_url}/job/{encoded_path}/api/json?tree=_class"
+
+        try:
+            resp = self.session.get(url, timeout=self.timeout)
+            if resp.ok:
+                data = resp.json()
+                job_class = data.get("_class", "")
+                is_pipeline = "WorkflowJob" in job_class
+                log_debug(f"Job 类型检测: {job_path} -> {job_class} (pipeline={is_pipeline})")
+                return is_pipeline
+        except Exception as e:
+            log_debug(f"Job 类型检测失败: {e}")
+
+        return False
+
+    # ========================================================================
     # 公共方法：触发构建
     # ========================================================================
 
@@ -204,6 +240,18 @@ class JenkinsClient:
         log_debug(f"触发构建: {url}")
         log_debug(f"参数: {params}")
 
+        # Pipeline 项目的 git-parameter-plugin 不接受 origin/ 前缀
+        # 自动检测 Job 类型，Pipeline 时去掉参数值中的 origin/ 前缀
+        effective_params = params
+        if self._is_pipeline_job(job_path):
+            stripped = {
+                k: v[len("origin/"):] if isinstance(v, str) and v.startswith("origin/") else v
+                for k, v in params.items()
+            }
+            if stripped != params:
+                log_debug(f"Pipeline Job，去掉 origin/ 前缀: {params} -> {stripped}")
+                effective_params = stripped
+
         # 准备请求头
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
@@ -219,7 +267,7 @@ class JenkinsClient:
             # Jenkins 返回 201 + Location 头，不是 302 重定向
             resp = self.session.post(
                 url,
-                data=params,  # 参数作为 form data 发送
+                data=effective_params,  # 参数作为 form data 发送
                 headers=headers,
                 timeout=self.timeout,
                 allow_redirects=False,
