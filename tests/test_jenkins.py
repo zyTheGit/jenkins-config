@@ -9,22 +9,11 @@ def client():
     return JenkinsClient("http://localhost:8080", "test-token", "admin")
 
 
-def _mock_freestyle(mock_get):
-    """配置 mock_get 返回 FreeStyleProject 类型"""
-    # _is_pipeline_job 调用 session.get，需要区分 crumb 和 job type 查询
-    # 简化：让所有 session.get 返回 FreeStyleProject
-    mock_get.return_value.ok = True
-    mock_get.return_value.json.return_value = {
-        "_class": "hudson.model.FreeStyleProject"
-    }
-
-
-def _mock_pipeline(mock_get):
-    """配置 mock_get 返回 WorkflowJob 类型"""
-    mock_get.return_value.ok = True
-    mock_get.return_value.json.return_value = {
-        "_class": "org.jenkinsci.plugins.workflow.job.WorkflowJob"
-    }
+def _mock_crumb(mock_get):
+    """配置 mock_get 返回 crumb"""
+    mock_get.return_value.json.side_effect = [
+        {"crumb": "test-crumb", "crumbRequestField": "Jenkins-Crumb"},
+    ]
 
 
 def test_get_crumb(client):
@@ -38,10 +27,12 @@ def test_get_crumb(client):
 
 
 def test_trigger_build_success(client):
-    """FreeStyle Job 触发成功，参数不变"""
+    """触发构建成功，参数原样发送"""
     with patch.object(client.session, "get") as mock_get, \
          patch.object(client.session, "post") as mock_post:
-        _mock_freestyle(mock_get)
+        mock_get.return_value.json.return_value = {
+            "crumb": "test-crumb", "crumbRequestField": "Jenkins-Crumb"
+        }
         mock_response = Mock()
         mock_response.status_code = 201
         mock_response.headers = {"Location": "http://localhost:8080/queue/item/123/"}
@@ -50,60 +41,29 @@ def test_trigger_build_success(client):
         result, diagnostic = client.trigger_build("test-job", {"BRANCH": "origin/prod"})
         assert result == "http://localhost:8080/queue/item/123/"
         assert diagnostic == ""
-        # FreeStyle 不去前缀，参数原样发送
-        call_params = mock_post.call_args[1].get("data") or mock_post.call_args[0][1] if mock_post.call_args[0] else mock_post.call_args[1]["data"]
+        # 参数原样发送，不修改 origin/ 前缀
+        call_params = mock_post.call_args[1]["data"]
         assert call_params["BRANCH"] == "origin/prod"
 
 
-def test_trigger_build_pipeline_strips_origin(client):
-    """Pipeline Job 自动去掉 origin/ 前缀"""
+def test_trigger_build_params_unchanged(client):
+    """所有参数原样发送，不做任何修改"""
     with patch.object(client.session, "get") as mock_get, \
          patch.object(client.session, "post") as mock_post:
-        _mock_pipeline(mock_get)
+        mock_get.return_value.json.return_value = {
+            "crumb": "test-crumb", "crumbRequestField": "Jenkins-Crumb"
+        }
         mock_response = Mock()
         mock_response.status_code = 201
         mock_response.headers = {"Location": "http://localhost:8080/queue/item/456/"}
         mock_post.return_value = mock_response
 
-        result, diagnostic = client.trigger_build("pipeline-job", {"BRANCH": "origin/prod"})
-        assert result == "http://localhost:8080/queue/item/456/"
-        assert diagnostic == ""
-        # Pipeline 去掉 origin/ 前缀
-        call_params = mock_post.call_args[1]["data"]
-        assert call_params["BRANCH"] == "prod"
-
-
-def test_trigger_build_pipeline_no_origin_prefix(client):
-    """Pipeline Job 参数无 origin/ 前缀时不修改"""
-    with patch.object(client.session, "get") as mock_get, \
-         patch.object(client.session, "post") as mock_post:
-        _mock_pipeline(mock_get)
-        mock_response = Mock()
-        mock_response.status_code = 201
-        mock_response.headers = {"Location": "http://localhost:8080/queue/item/789/"}
-        mock_post.return_value = mock_response
-
-        result, diagnostic = client.trigger_build("pipeline-job", {"BRANCH": "develop"})
-        assert result == "http://localhost:8080/queue/item/789/"
-        call_params = mock_post.call_args[1]["data"]
-        assert call_params["BRANCH"] == "develop"
-
-
-def test_trigger_build_pipeline_mixed_params(client):
-    """Pipeline Job 只有含 origin/ 的参数被修改，其他参数不变"""
-    with patch.object(client.session, "get") as mock_get, \
-         patch.object(client.session, "post") as mock_post:
-        _mock_pipeline(mock_get)
-        mock_response = Mock()
-        mock_response.status_code = 201
-        mock_response.headers = {"Location": "http://localhost:8080/queue/item/100/"}
-        mock_post.return_value = mock_response
-
         params = {"BRANCH": "origin/prod", "SKIP_TESTS": "true", "VERSION": "1.0"}
         result, diagnostic = client.trigger_build("pipeline-job", params)
-        assert result == "http://localhost:8080/queue/item/100/"
+        assert result == "http://localhost:8080/queue/item/456/"
+        assert diagnostic == ""
         call_params = mock_post.call_args[1]["data"]
-        assert call_params["BRANCH"] == "prod"
+        assert call_params["BRANCH"] == "origin/prod"
         assert call_params["SKIP_TESTS"] == "true"
         assert call_params["VERSION"] == "1.0"
 
@@ -141,7 +101,9 @@ def test_trigger_build_non_201(client):
     """触发构建返回非 201"""
     with patch.object(client.session, "get") as mock_get, \
          patch.object(client.session, "post") as mock_post:
-        _mock_freestyle(mock_get)
+        mock_get.return_value.json.return_value = {
+            "crumb": "test-crumb", "crumbRequestField": "Jenkins-Crumb"
+        }
         mock_response = Mock()
         mock_response.status_code = 403
         mock_response.text = "Forbidden"
@@ -157,7 +119,9 @@ def test_trigger_build_network_error(client):
     """触发构建网络异常"""
     with patch.object(client.session, "get") as mock_get, \
          patch.object(client.session, "post") as mock_post:
-        _mock_freestyle(mock_get)
+        mock_get.return_value.json.return_value = {
+            "crumb": "test-crumb", "crumbRequestField": "Jenkins-Crumb"
+        }
         mock_post.side_effect = Exception("Connection refused")
 
         result, diagnostic = client.trigger_build("test-job", {"branch": "main"})
@@ -296,7 +260,9 @@ def test_trigger_build_with_crumb_debug(client):
     try:
         with patch.object(client.session, "get") as mock_get, \
              patch.object(client.session, "post") as mock_post:
-            _mock_freestyle(mock_get)
+            mock_get.return_value.json.return_value = {
+                "crumb": "test-crumb", "crumbRequestField": "Jenkins-Crumb"
+            }
             mock_response = Mock()
             mock_response.status_code = 403
             mock_response.text = "Forbidden"
@@ -333,7 +299,9 @@ def test_trigger_build_success_with_crumb_and_debug(client):
     try:
         with patch.object(client.session, "get") as mock_get, \
              patch.object(client.session, "post") as mock_post:
-            _mock_freestyle(mock_get)
+            mock_get.return_value.json.return_value = {
+                "crumb": "test-crumb", "crumbRequestField": "Jenkins-Crumb"
+            }
             mock_response = Mock()
             mock_response.status_code = 201
             mock_response.headers = {
@@ -346,42 +314,3 @@ def test_trigger_build_success_with_crumb_and_debug(client):
             assert diagnostic == ""
     finally:
         set_debug_mode(False)
-
-
-# ============================================================================
-# _is_pipeline_job 检测
-# ============================================================================
-
-
-def test_is_pipeline_job_true(client):
-    """Pipeline Job 检测返回 True"""
-    with patch.object(client.session, "get") as mock_get:
-        mock_get.return_value.ok = True
-        mock_get.return_value.json.return_value = {
-            "_class": "org.jenkinsci.plugins.workflow.job.WorkflowJob"
-        }
-        assert client._is_pipeline_job("pipeline-job") is True
-
-
-def test_is_pipeline_job_false(client):
-    """FreeStyle Job 检测返回 False"""
-    with patch.object(client.session, "get") as mock_get:
-        mock_get.return_value.ok = True
-        mock_get.return_value.json.return_value = {
-            "_class": "hudson.model.FreeStyleProject"
-        }
-        assert client._is_pipeline_job("freestyle-job") is False
-
-
-def test_is_pipeline_job_api_error(client):
-    """Job 类型查询失败时返回 False（保守策略：保留原始参数）"""
-    with patch.object(client.session, "get") as mock_get:
-        mock_get.return_value.ok = False
-        assert client._is_pipeline_job("unknown-job") is False
-
-
-def test_is_pipeline_job_exception(client):
-    """Job 类型查询异常时返回 False"""
-    with patch.object(client.session, "get") as mock_get:
-        mock_get.side_effect = Exception("Network error")
-        assert client._is_pipeline_job("unknown-job") is False
