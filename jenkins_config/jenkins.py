@@ -27,6 +27,12 @@ import requests
 
 from .utils import log_debug, is_debug_mode
 
+# Git Parameter 插件的 _class 标识
+_GIT_PARAM_CLASS = "GitParameterDefinition"
+
+# Git Parameter 插件要求的远程仓库名前缀
+_REMOTE_PREFIX = "origin/"
+
 
 # ============================================================================
 # 枚举和数据类定义
@@ -125,6 +131,70 @@ class JenkinsClient:
         # 设置默认超时
         self.timeout = timeout
 
+        # 缓存 Git Parameter 参数名查询结果 {job_path: set[str]}
+        self._git_param_cache: dict[str, set[str]] = {}
+
+    # ========================================================================
+    # 公共方法：查询 Git Parameter 参数名
+    # ========================================================================
+
+    def get_git_parameter_names(self, job_path: str) -> set[str]:
+        """
+        查询 Job 中 GitParameterDefinition 类型的参数名
+
+        Git Parameter 插件会验证分支值是否存在于远程仓库，
+        裸名（如 prod）不在分支列表中，需要 origin/ 前缀（如 origin/prod）。
+        此方法查询 Job 的参数定义，返回所有 GitParameterDefinition 参数名，
+        供 trigger_build 自动添加 origin/ 前缀。
+
+        结果会缓存，同一 Job 只查询一次（仅缓存成功结果，失败时下次重试）。
+
+        Args:
+            job_path: Jenkins Job 路径
+
+        Returns:
+            GitParameterDefinition 参数名集合，查询失败返回空集合
+        """
+        # 检查缓存
+        if job_path in self._git_param_cache:
+            return self._git_param_cache[job_path]
+
+        git_params: set[str] = set()
+        query_success = False
+
+        try:
+            encoded_path = quote(job_path, safe="-_.~")
+            url = (
+                f"{self.base_url}/job/{encoded_path}"
+                f"/api/json?tree=property[parameterDefinitions[name,_class]]"
+            )
+            resp = self.session.get(url, timeout=self.timeout)
+            if resp.ok:
+                data = resp.json()
+                for prop in data.get("property", []):
+                    for param in prop.get("parameterDefinitions", []):
+                        param_class = param.get("_class", "")
+                        # 匹配 GitParameterDefinition（含完整包名或短名）
+                        if _GIT_PARAM_CLASS in param_class:
+                            git_params.add(param["name"])
+                query_success = True
+                log_debug(
+                    f"Job '{job_path}' Git Parameter 参数: "
+                    f"{git_params or '无'}"
+                )
+            else:
+                log_debug(
+                    f"查询 Job '{job_path}' 参数定义失败: "
+                    f"HTTP {resp.status_code}"
+                )
+        except Exception as e:
+            log_debug(f"查询 Job '{job_path}' 参数定义异常: {e}")
+
+        # 仅缓存成功查询的结果（包括空集合），失败不缓存以便下次重试
+        if query_success:
+            self._git_param_cache[job_path] = git_params
+        return git_params
+
     # ========================================================================
     # 私有方法：CSRF Token 处理
     # ========================================================================
@@ -174,10 +244,12 @@ class JenkinsClient:
         触发 Jenkins 构建
 
         发送构建请求到 Jenkins，返回队列 URL 用于后续查询。
+        对 GitParameterDefinition 类型的参数值自动添加 origin/ 前缀
+        （Git Parameter 插件要求分支值带远程仓库名前缀）。
 
         Args:
             job_path: Jenkins Job 路径，如 "my-project" 或 "folder/my-project"
-            params: 构建参数字典，如 {"branch": "main", "skip_tests": "true"}
+            params: 构建参数字典，如 {"BRANCH": "prod", "skip_tests": "true"}
 
         Returns:
             元组 (queue_url, diagnostic):
@@ -188,9 +260,11 @@ class JenkinsClient:
             - 返回的 URL 用于查询构建编号（get_build_number）
             - Jenkins 会先排队，然后分配构建编号
             - HTTP 201 表示请求成功，队列项 URL 在 Location 头中
+            - Git Parameter 参数值如无 origin/ 前缀会自动添加
 
         Example:
-            >>> url, diag = client.trigger_build("my-project", {"branch": "develop"})
+            >>> url, diag = client.trigger_build("my-project", {"BRANCH": "prod"})
+            >>> # BRANCH="prod" 自动变为 BRANCH="origin/prod"
             >>> print(url)
             http://jenkins.example.com/queue/item/456/
         """
@@ -201,8 +275,22 @@ class JenkinsClient:
         # 构建完整 URL
         url = f"{self.base_url}/job/{encoded_path}/buildWithParameters"
 
+        # 对 Git Parameter 参数值自动添加 origin/ 前缀
+        git_param_names = self.get_git_parameter_names(job_path)
+        effective_params = dict(params)  # 不修改原始参数
+        for name in git_param_names:
+            if name in effective_params:
+                value = str(effective_params[name])
+                if value and not value.startswith(_REMOTE_PREFIX):
+                    effective_params[name] = f"{_REMOTE_PREFIX}{value}"
+                    log_debug(
+                        f"Git Parameter '{name}': "
+                        f"'{value}' -> 'origin/{value}'"
+                    )
+
         log_debug(f"触发构建: {url}")
-        log_debug(f"参数: {params}")
+        log_debug(f"原始参数: {params}")
+        log_debug(f"发送参数: {effective_params}")
 
         # 准备请求头
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
@@ -219,7 +307,7 @@ class JenkinsClient:
             # Jenkins 返回 201 + Location 头，不是 302 重定向
             resp = self.session.post(
                 url,
-                data=params,  # 参数作为 form data 发送
+                data=effective_params,  # 参数作为 form data 发送（含自动前缀）
                 headers=headers,
                 timeout=self.timeout,
                 allow_redirects=False,

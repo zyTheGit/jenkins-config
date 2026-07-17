@@ -1,6 +1,6 @@
 # tests/test_jenkins.py
 import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 from jenkins_config.jenkins import JenkinsClient, BuildStatus
 
 
@@ -26,81 +26,17 @@ def test_get_crumb(client):
         assert result == ("Jenkins-Crumb", "test-crumb")
 
 
-def test_trigger_build_success(client):
-    """触发构建成功，参数原样发送"""
-    with patch.object(client.session, "get") as mock_get, \
-         patch.object(client.session, "post") as mock_post:
-        mock_get.return_value.json.return_value = {
-            "crumb": "test-crumb", "crumbRequestField": "Jenkins-Crumb"
-        }
-        mock_response = Mock()
-        mock_response.status_code = 201
-        mock_response.headers = {"Location": "http://localhost:8080/queue/item/123/"}
-        mock_post.return_value = mock_response
-
-        result, diagnostic = client.trigger_build("test-job", {"BRANCH": "origin/prod"})
-        assert result == "http://localhost:8080/queue/item/123/"
-        assert diagnostic == ""
-        # 参数原样发送，不修改 origin/ 前缀
-        call_params = mock_post.call_args[1]["data"]
-        assert call_params["BRANCH"] == "origin/prod"
-
-
-def test_trigger_build_params_unchanged(client):
-    """所有参数原样发送，不做任何修改"""
-    with patch.object(client.session, "get") as mock_get, \
-         patch.object(client.session, "post") as mock_post:
-        mock_get.return_value.json.return_value = {
-            "crumb": "test-crumb", "crumbRequestField": "Jenkins-Crumb"
-        }
-        mock_response = Mock()
-        mock_response.status_code = 201
-        mock_response.headers = {"Location": "http://localhost:8080/queue/item/456/"}
-        mock_post.return_value = mock_response
-
-        params = {"BRANCH": "origin/prod", "SKIP_TESTS": "true", "VERSION": "1.0"}
-        result, diagnostic = client.trigger_build("pipeline-job", params)
-        assert result == "http://localhost:8080/queue/item/456/"
-        assert diagnostic == ""
-        call_params = mock_post.call_args[1]["data"]
-        assert call_params["BRANCH"] == "origin/prod"
-        assert call_params["SKIP_TESTS"] == "true"
-        assert call_params["VERSION"] == "1.0"
-
-
-def test_get_build_number(client):
-    with patch.object(client.session, "get") as mock_get:
-        # 第一次返回空，第二次返回编号
-        mock_get.return_value.json.side_effect = [
-            {"cancelled": False, "executable": None},
-            {"cancelled": False, "executable": {"number": 456}},
-        ]
-        result = client.get_build_number(
-            "http://localhost:8080/queue/item/123/", timeout=2
-        )
-        assert result == 456
-
-
-def test_get_build_status(client):
-    with patch.object(client.session, "get") as mock_get:
-        mock_get.return_value.json.return_value = {
-            "result": "SUCCESS",
-            "duration": 60000,
-        }
-        info = client.get_build_status("test-job", 123)
-        assert info.status == BuildStatus.SUCCESS
-        assert info.duration == 60
-
-
 # ============================================================================
-# 失败路径
+# trigger_build 基础测试（Git Parameter 相关测试见 test_jenkins_git_param.py）
 # ============================================================================
 
 
 def test_trigger_build_non_201(client):
     """触发构建返回非 201"""
-    with patch.object(client.session, "get") as mock_get, \
+    with patch.object(client, "get_git_parameter_names") as mock_git_params, \
+         patch.object(client.session, "get") as mock_get, \
          patch.object(client.session, "post") as mock_post:
+        mock_git_params.return_value = set()
         mock_get.return_value.json.return_value = {
             "crumb": "test-crumb", "crumbRequestField": "Jenkins-Crumb"
         }
@@ -117,8 +53,10 @@ def test_trigger_build_non_201(client):
 
 def test_trigger_build_network_error(client):
     """触发构建网络异常"""
-    with patch.object(client.session, "get") as mock_get, \
+    with patch.object(client, "get_git_parameter_names") as mock_git_params, \
+         patch.object(client.session, "get") as mock_get, \
          patch.object(client.session, "post") as mock_post:
+        mock_git_params.return_value = set()
         mock_get.return_value.json.return_value = {
             "crumb": "test-crumb", "crumbRequestField": "Jenkins-Crumb"
         }
@@ -127,6 +65,24 @@ def test_trigger_build_network_error(client):
         result, diagnostic = client.trigger_build("test-job", {"branch": "main"})
         assert result is None
         assert "Connection refused" in diagnostic
+
+
+# ============================================================================
+# get_build_number 测试
+# ============================================================================
+
+
+def test_get_build_number(client):
+    with patch.object(client.session, "get") as mock_get:
+        # 第一次返回空，第二次返回编号
+        mock_get.return_value.json.side_effect = [
+            {"cancelled": False, "executable": None},
+            {"cancelled": False, "executable": {"number": 456}},
+        ]
+        result = client.get_build_number(
+            "http://localhost:8080/queue/item/123/", timeout=2
+        )
+        assert result == 456
 
 
 def test_get_build_number_cancelled(client):
@@ -163,6 +119,30 @@ def test_get_build_number_http_error(client):
             "http://localhost/queue/item/1/", timeout=1
         )
         assert result is None
+
+
+def test_get_build_number_exception(client):
+    """队列查询异常时返回 None"""
+    with patch.object(client.session, "get") as mock_get:
+        mock_get.side_effect = Exception("Queue API error")
+        result = client.get_build_number("http://localhost/queue/item/1/", timeout=1)
+        assert result is None
+
+
+# ============================================================================
+# get_build_status 测试
+# ============================================================================
+
+
+def test_get_build_status(client):
+    with patch.object(client.session, "get") as mock_get:
+        mock_get.return_value.json.return_value = {
+            "result": "SUCCESS",
+            "duration": 60000,
+        }
+        info = client.get_build_status("test-job", 123)
+        assert info.status == BuildStatus.SUCCESS
+        assert info.duration == 60
 
 
 def test_get_build_status_failure(client):
@@ -207,6 +187,19 @@ def test_get_build_status_http_error(client):
         assert info.status == BuildStatus.BUILDING
 
 
+def test_get_build_status_exception(client):
+    """状态查询异常时返回 BUILDING"""
+    with patch.object(client.session, "get") as mock_get:
+        mock_get.side_effect = Exception("Status API error")
+        info = client.get_build_status("test-job", 999)
+        assert info.status == BuildStatus.BUILDING
+
+
+# ============================================================================
+# get_build_log 测试
+# ============================================================================
+
+
 def test_get_build_log_empty(client):
     """获取日志返回空"""
     with patch.object(client.session, "get") as mock_get:
@@ -232,6 +225,11 @@ def test_get_build_log_network_error(client):
         assert result == ""
 
 
+# ============================================================================
+# Crumb 测试
+# ============================================================================
+
+
 def test_get_crumb_failure(client):
     """获取 Crumb 失败"""
     with patch.object(client.session, "get") as mock_get:
@@ -249,7 +247,7 @@ def test_get_crumb_exception(client):
 
 
 # ============================================================================
-# 深度边缘路径（异常处理、debug 日志）
+# 深度边缘路径（debug 日志）
 # ============================================================================
 
 
@@ -258,8 +256,10 @@ def test_trigger_build_with_crumb_debug(client):
     from jenkins_config.utils import set_debug_mode
     set_debug_mode(True)
     try:
-        with patch.object(client.session, "get") as mock_get, \
+        with patch.object(client, "get_git_parameter_names") as mock_git_params, \
+             patch.object(client.session, "get") as mock_get, \
              patch.object(client.session, "post") as mock_post:
+            mock_git_params.return_value = set()
             mock_get.return_value.json.return_value = {
                 "crumb": "test-crumb", "crumbRequestField": "Jenkins-Crumb"
             }
@@ -276,29 +276,15 @@ def test_trigger_build_with_crumb_debug(client):
         set_debug_mode(False)
 
 
-def test_get_build_number_exception(client):
-    """队列查询异常时返回 None"""
-    with patch.object(client.session, "get") as mock_get:
-        mock_get.side_effect = Exception("Queue API error")
-        result = client.get_build_number("http://localhost/queue/item/1/", timeout=1)
-        assert result is None
-
-
-def test_get_build_status_exception(client):
-    """状态查询异常时返回 BUILDING"""
-    with patch.object(client.session, "get") as mock_get:
-        mock_get.side_effect = Exception("Status API error")
-        info = client.get_build_status("test-job", 999)
-        assert info.status == BuildStatus.BUILDING
-
-
 def test_trigger_build_success_with_crumb_and_debug(client):
     """触发构建成功且有 Crumb（debug 日志）"""
     from jenkins_config.utils import set_debug_mode
     set_debug_mode(True)
     try:
-        with patch.object(client.session, "get") as mock_get, \
+        with patch.object(client, "get_git_parameter_names") as mock_git_params, \
+             patch.object(client.session, "get") as mock_get, \
              patch.object(client.session, "post") as mock_post:
+            mock_git_params.return_value = set()
             mock_get.return_value.json.return_value = {
                 "crumb": "test-crumb", "crumbRequestField": "Jenkins-Crumb"
             }
