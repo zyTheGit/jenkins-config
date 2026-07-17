@@ -134,6 +134,20 @@ Parallel: `ThreadPoolExecutor` + `as_completed`. Sequential: simple for-loop.
 ### Error handling
 When a build fails to trigger or queue times out, `save_error_log()` writes a structured `.log` file with diagnostics and troubleshooting suggestions. `extract_error_lines()` searches console logs for known error keywords.
 
+## Agent skills
+
+### Issue tracker
+
+Issues tracked in GitHub Issues via `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-role vocabulary: needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout — one `CONTEXT.md` + `docs/adr/` at repo root. See `docs/agents/domain.md`.
+
 ## Dependencies
 
 - `requests>=2.28.0` — Jenkins HTTP API
