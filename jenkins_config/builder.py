@@ -131,8 +131,9 @@ class Builder:
 
         log_info(f"构建已排队，等待分配编号：{job.key}")
 
-        # 步骤 2：获取构建编号
-        build_num = self.client.get_build_number(queue_url, timeout=30)
+        # 步骤 2：获取构建编号（队列等待超时由 build.queue_timeout 配置）
+        queue_timeout = self.config.build.queue_timeout
+        build_num = self.client.get_build_number(queue_url, timeout=queue_timeout)
 
         if not build_num:
             log_error(f"获取构建编号超时：{job.key}")
@@ -140,7 +141,7 @@ class Builder:
                 log_dir,
                 job,
                 error_type="queue_timeout",
-                error_msg="获取构建编号超时 - 30秒内未分配执行器",
+                error_msg=f"获取构建编号超时 - {queue_timeout}秒内未分配执行器",
                 extra_info=f"队列URL: {queue_url}",
             )
             return BuildResult(

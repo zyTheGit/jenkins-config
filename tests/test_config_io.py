@@ -207,6 +207,24 @@ def test_load_no_optional_fields(tmp_path):
     config = Config.load(str(config_file))
     assert config.server.url == "http://localhost:8080"
     assert config.build.mode == "parallel"  # 默认值
+    assert config.build.queue_timeout == 30  # 队列等待超时默认值
+
+
+def test_load_queue_timeout_custom(tmp_path):
+    """build.queue_timeout 可从配置文件读取，且保存后不丢失"""
+    config_file = tmp_path / "test.yaml"
+    config_file.write_text(
+        "server:\n  url: http://localhost:8080\n  token: t\n"
+        "build:\n  queue_timeout: 120\n",
+        encoding="utf-8",
+    )
+    config = Config.load(str(config_file))
+    assert config.build.queue_timeout == 120
+
+    # 序列化应保留该字段
+    d = config_to_dict(config)
+    assert d["build"]["queue_timeout"] == 120
+
 
 
 def test_load_project_without_path(tmp_path):

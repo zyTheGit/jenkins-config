@@ -160,6 +160,9 @@ def _run_init_interactive(config_file: Path):
         poll_interval = questionary.text(
             "轮询间隔（秒）:", default="10", style=CUSTOM_STYLE
         ).ask()
+        queue_timeout = questionary.text(
+            "队列等待超时（秒）:", default="30", style=CUSTOM_STYLE
+        ).ask()
         build_timeout = questionary.text(
             "构建超时（秒）:", default="3600", style=CUSTOM_STYLE
         ).ask()
@@ -170,6 +173,7 @@ def _run_init_interactive(config_file: Path):
         build_conf = BuildConfig(
             mode=mode,
             poll_interval=int(poll_interval) if poll_interval else 10,
+            queue_timeout=int(queue_timeout) if queue_timeout else 30,
             build_timeout=int(build_timeout) if build_timeout else 3600,
             log_dir=log_dir or "./jenkins_logs",
         )
@@ -253,6 +257,7 @@ def _run_init_interactive(config_file: Path):
         "build": {
             "mode": build_conf.mode,
             "poll_interval": build_conf.poll_interval,
+            "queue_timeout": build_conf.queue_timeout,
             "build_timeout": build_conf.build_timeout,
             "curl_timeout": build_conf.curl_timeout,
             "log_dir": build_conf.log_dir,

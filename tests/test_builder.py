@@ -88,6 +88,25 @@ def test_build_queue_timeout(builder, tmp_path):
     assert result.error == "获取构建编号超时"
 
 
+def test_build_queue_timeout_uses_config(builder, tmp_path):
+    """队列等待超时应取自 build.queue_timeout 配置，而非硬编码 30 秒"""
+    builder.config.build = BuildConfig(
+        queue_timeout=120, build_timeout=60, poll_interval=1
+    )
+    builder.client.get_build_number.return_value = None
+    job = Job(key="dev_app", path="slow-job", branch="main", params={}, env="dev")
+
+    result = builder._build_single(job, str(tmp_path))
+
+    # 配置的超时值应透传给 get_build_number
+    assert builder.client.get_build_number.call_args.kwargs["timeout"] == 120
+    assert result.status == BuildStatus.TIMEOUT
+    # 错误日志中的超时秒数也应为配置值
+    content = Path(result.log_file).read_text(encoding="utf-8")
+    assert "120秒" in content
+
+
+
 def test_build_aborted_from_status(builder, tmp_path):
     """构建被中止"""
     builder.client.get_build_status.return_value = Mock(

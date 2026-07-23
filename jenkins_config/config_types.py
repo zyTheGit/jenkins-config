@@ -38,6 +38,7 @@ class BuildConfig:
     Attributes:
         mode: 构建模式，"parallel" 或 "sequential"
         poll_interval: 轮询间隔（秒）
+        queue_timeout: 队列等待超时（秒），触发后等待分配构建编号
         build_timeout: 构建超时（秒）
         curl_timeout: HTTP 请求超时（秒）
         log_dir: 日志目录
@@ -46,6 +47,7 @@ class BuildConfig:
 
     mode: str = "parallel"
     poll_interval: int = 10
+    queue_timeout: int = 30
     build_timeout: int = 3600
     curl_timeout: int = 30
     log_dir: str = "./jenkins_logs"

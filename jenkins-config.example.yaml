@@ -11,6 +11,7 @@ server:
 build:
   mode: parallel                           # 构建模式: parallel(并行) / sequential(顺序)
   poll_interval: 10                        # 轮询间隔（秒）
+  queue_timeout: 30                        # 队列等待超时（秒）：触发后等待分配构建编号
   build_timeout: 3600                      # 构建超时（秒）
   curl_timeout: 30                         # HTTP 请求超时（秒）
   log_dir: ./jenkins_logs                  # 日志目录

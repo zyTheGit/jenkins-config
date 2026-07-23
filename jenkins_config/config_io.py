@@ -77,6 +77,7 @@ def _from_dict(data: dict[str, Any]) -> Config:
     build = BuildConfig(
         mode=build_data.get("mode", "parallel"),
         poll_interval=build_data.get("poll_interval", 10),
+        queue_timeout=build_data.get("queue_timeout", 30),
         build_timeout=build_data.get("build_timeout", 3600),
         curl_timeout=build_data.get("curl_timeout", 30),
         log_dir=build_data.get("log_dir", "./jenkins_logs"),
@@ -268,6 +269,7 @@ def config_to_dict(config: Config) -> dict[str, Any]:
         "build": {
             "mode": config.build.mode,
             "poll_interval": config.build.poll_interval,
+            "queue_timeout": config.build.queue_timeout,
             "build_timeout": config.build.build_timeout,
             "curl_timeout": config.build.curl_timeout,
             "log_dir": config.build.log_dir,
@@ -310,6 +312,7 @@ def generate_template() -> dict[str, Any]:
         "build": {
             "mode": "parallel",
             "poll_interval": 10,
+            "queue_timeout": 30,
             "build_timeout": 3600,
             "curl_timeout": 30,
             "log_dir": "./jenkins_logs",
@@ -346,6 +349,7 @@ def show_template():
         "  build:         （可选）构建行为配置",
         "    mode               可选  parallel(默认) / sequential",
         "    poll_interval      可选  轮询间隔秒数 (默认: 10)",
+        "    queue_timeout      可选  队列等待超时秒数 (默认: 30)",
         "    build_timeout      可选  构建超时秒数 (默认: 3600)",
         "    curl_timeout       可选  HTTP超时秒数 (默认: 30)",
         "    log_dir            可选  日志目录 (默认: ./jenkins_logs)",
