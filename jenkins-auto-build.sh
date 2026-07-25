@@ -11,6 +11,13 @@ else
 fi
 cd "$SCRIPT_DIR"
 
-# 使用 uv 运行 Python 模块
-echo "[INFO] 正在准备环境..." >&2
-exec uv run python -m jenkins_config.cli "$@"
+# 优先使用 venv 中的 python（跳过 uv run 的 ~0.6s 开销）
+# 仅在 venv 不存在时回退到 uv run
+if [ -f ".venv/Scripts/python.exe" ]; then
+    exec .venv/Scripts/python.exe -m jenkins_config.cli "$@"
+elif [ -f ".venv/bin/python" ]; then
+    exec .venv/bin/python -m jenkins_config.cli "$@"
+else
+    echo "[INFO] 正在准备环境..." >&2
+    exec uv run python -m jenkins_config.cli "$@"
+fi

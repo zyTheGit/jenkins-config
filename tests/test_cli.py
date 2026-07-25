@@ -249,7 +249,7 @@ def test_main_debug_mode():
     with (
         patch.object(sys, "argv", test_args),
         patch("jenkins_config.cmd_list.list_environments") as mock_fn,
-        patch("jenkins_config.cli.set_debug_mode") as mock_debug,
+        patch("jenkins_config.utils.set_debug_mode") as mock_debug,
     ):
         main()
         mock_debug.assert_called_once_with(True)

@@ -8,8 +8,8 @@
 import sys
 from pathlib import Path
 
-from .config import Config
-from .utils import log_debug, log_info, log_warn, set_debug_mode
+# 懒导入：Config 和 utils 仅在 main() 内部导入，避免启动时加载整个配置模块链
+# （config → config_io → config_types + yaml，约 0.16s）
 
 
 def main():
@@ -21,6 +21,9 @@ def main():
         [project.scripts]
         jenkins-build = "jenkins_config.cli:main"
     """
+    from .config import Config
+    from .utils import log_debug, log_info, log_warn, set_debug_mode
+
     import argparse
 
     parser = argparse.ArgumentParser(
