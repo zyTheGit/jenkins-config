@@ -157,7 +157,7 @@ def test_get_last_build_group_filters_zero_builds(tmp_path):
 
 
 def test_clear_history(tmp_path):
-    """清空历史记录"""
+    """\u6e05\u7a7a\u5386\u53f2\u8bb0\u5f55"""
     history_file = tmp_path / "history.json"
     manager = HistoryManager(str(history_file))
     manager.add(BuildRecord(
@@ -168,3 +168,98 @@ def test_clear_history(tmp_path):
 
     manager.clear()
     assert len(manager.list()) == 0
+
+
+# ============================================================================
+# add_batch \u6279\u91cf\u64cd\u4f5c
+# ============================================================================
+
+
+def test_add_batch_inserts_at_front(tmp_path):
+    """\u6279\u91cf\u63d2\u5165\u540e\u65b0\u8bb0\u5f55\u4f4d\u4e8e\u5f00\u5934\uff08\u6700\u65b0\u7684\u5728\u524d\uff09"""
+    history_file = tmp_path / "history.json"
+    manager = HistoryManager(str(history_file))
+
+    # \u5148\u6dfb\u52a0\u4e00\u6761\u65e7\u8bb0\u5f55
+    manager.add(BuildRecord(
+        timestamp="2026-03-20T09:00:00", env="dev",
+        job_key="dev_old", build_num=1,
+        status="SUCCESS", duration=60, log_file="",
+    ))
+
+    # \u6279\u91cf\u6dfb\u52a0\u4e24\u6761\u65b0\u8bb0\u5f55
+    new_records = [
+        BuildRecord(
+            timestamp="2026-03-20T10:00:00", env="dev",
+            job_key="dev_new_1", build_num=2,
+            status="SUCCESS", duration=30, log_file="",
+        ),
+        BuildRecord(
+            timestamp="2026-03-20T10:01:00", env="dev",
+            job_key="dev_new_2", build_num=3,
+            status="FAILURE", duration=45, log_file="",
+        ),
+    ]
+    manager.add_batch(new_records)
+
+    records = manager.list()
+    assert len(records) == 3
+    # \u65b0\u8bb0\u5f55\u5e94\u5728\u5f00\u5934\uff0c\u4fdd\u6301\u539f\u59cb\u987a\u5e8f
+    assert records[0].job_key == "dev_new_1"
+    assert records[1].job_key == "dev_new_2"
+    # \u65e7\u8bb0\u5f55\u5e94\u5728\u672b\u5c3e
+    assert records[2].job_key == "dev_old"
+
+
+def test_add_batch_max_records_truncation(tmp_path):
+    """\u6279\u91cf\u6dfb\u52a0\u540e\u8d85\u8fc7 MAX_RECORDS \u7684\u65e7\u8bb0\u5f55\u88ab\u622a\u65ad"""
+    history_file = tmp_path / "history.json"
+    manager = HistoryManager(str(history_file))
+    manager.MAX_RECORDS = 4
+
+    # \u5148\u6dfb\u52a0 3 \u6761\u65e7\u8bb0\u5f55
+    for i in range(3):
+        manager.add(BuildRecord(
+            timestamp=f"2026-03-20T09:0{i}:00", env="dev",
+            job_key=f"dev_old_{i}", build_num=i,
+            status="SUCCESS", duration=60, log_file="",
+        ))
+
+    # \u6279\u91cf\u6dfb\u52a0 3 \u6761\u65b0\u8bb0\u5f55\uff0c\u603b\u8ba1 6 \u6761\uff0c\u5e94\u622a\u65ad\u4e3a 4 \u6761
+    new_records = [
+        BuildRecord(
+            timestamp=f"2026-03-20T10:0{i}:00", env="dev",
+            job_key=f"dev_new_{i}", build_num=10 + i,
+            status="SUCCESS", duration=30, log_file="",
+        )
+        for i in range(3)
+    ]
+    manager.add_batch(new_records)
+
+    records = manager.list()
+    assert len(records) == 4
+    # \u65b0\u8bb0\u5f55\u5e94\u5168\u90e8\u4fdd\u7559
+    assert {r.job_key for r in records} == {
+        "dev_new_0", "dev_new_1", "dev_new_2", "dev_old_2"
+    }
+    # 新记录在前，dev_old_2 是最后添加的旧记录（最新），位于末尾
+    assert records[0].job_key == "dev_new_0"
+    assert records[3].job_key == "dev_old_2"
+
+
+def test_add_batch_empty_list(tmp_path):
+    """\u7a7a\u5217\u8868\u8f93\u5165\u4e0d\u62a5\u9519\uff0c\u4e14\u4e0d\u5f71\u54cd\u73b0\u6709\u8bb0\u5f55"""
+    history_file = tmp_path / "history.json"
+    manager = HistoryManager(str(history_file))
+
+    manager.add(BuildRecord(
+        timestamp="", env="", job_key="existing",
+        build_num=1, status="SUCCESS", duration=60, log_file="",
+    ))
+
+    # \u4f20\u5165\u7a7a\u5217\u8868\uff0c\u4e0d\u5e94\u62a5\u9519
+    manager.add_batch([])
+
+    records = manager.list()
+    assert len(records) == 1
+    assert records[0].job_key == "existing"

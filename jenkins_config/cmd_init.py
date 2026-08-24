@@ -11,25 +11,10 @@ from pathlib import Path
 
 import questionary
 import yaml
-from questionary import Style
 
 from .config import Config
 from .config_types import BuildConfig
-from .utils import log_error, log_info, log_success, log_warn, print_header, print_sep
-
-CUSTOM_STYLE = Style(
-    [
-        ("qmark", "fg:cyan bold"),
-        ("question", "fg:white bold"),
-        ("answer", "fg:green bold"),
-        ("pointer", "fg:cyan bold"),
-        ("highlighted", "fg:cyan bold"),
-        ("selected", "fg:green"),
-        ("separator", "fg:gray"),
-        ("instruction", "fg:gray"),
-        ("text", "fg:white"),
-    ]
-)
+from .utils import CUSTOM_STYLE, log_error, log_info, log_success, log_warn, print_header, print_sep
 
 
 def _cli_cmd() -> str:
@@ -262,6 +247,7 @@ def _run_init_interactive(config_file: Path):
             "curl_timeout": build_conf.curl_timeout,
             "log_dir": build_conf.log_dir,
             "log_retention_days": build_conf.log_retention_days,
+            "max_parallel": build_conf.max_parallel,
         },
     }
 

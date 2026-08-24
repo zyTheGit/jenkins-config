@@ -29,7 +29,7 @@ import json
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any
 
 
 # ============================================================================
@@ -65,7 +65,7 @@ class BuildRecord:
     duration: int
     log_file: str
     branch: str = ""
-    params: dict = field(default_factory=dict)
+    params: dict[str, Any] = field(default_factory=dict)
     project_name: str = ""
 
 
@@ -206,7 +206,36 @@ class HistoryManager:
         # 写回文件
         self._write_records(records)
 
-    def list(self, env: Optional[str] = None, limit: int = 20) -> list[BuildRecord]:
+    def add_batch(self, records: list[BuildRecord]):
+        """
+        批量添加构建记录
+
+        一次读取、批量插入、一次写回，比循环调用 add() 更高效。
+
+        Args:
+            records: 构建记录对象列表
+
+        Note:
+            - 新记录整体插入到开头（最新的在前）
+            - 超过 MAX_RECORDS 的旧记录会被丢弃
+        """
+        if not records:
+            return
+
+        # 读取现有记录
+        existing = self._read_records()
+
+        # 将新记录转换为字典并整体插入到开头
+        new_dicts = [asdict(r) for r in records]
+        combined = new_dicts + existing
+
+        # 限制记录数量
+        combined = combined[: self.MAX_RECORDS]
+
+        # 一次写回文件
+        self._write_records(combined)
+
+    def list(self, env: str | None = None, limit: int = 20) -> list[BuildRecord]:
         """
         查询历史记录
 

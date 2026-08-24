@@ -22,10 +22,11 @@ import time
 from enum import Enum
 from dataclasses import dataclass
 from urllib.parse import quote
-from typing import Optional
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
-from .utils import log_debug, is_debug_mode
+from .utils import log_debug, log_warn, is_debug_mode
 
 # Git Parameter 插件的 _class 标识
 _GIT_PARAM_CLASS = "GitParameterDefinition"
@@ -60,6 +61,7 @@ class BuildStatus(Enum):
     BUILDING = "BUILDING"
     TIMEOUT = "TIMEOUT"
     CANCELLED = "CANCELLED"
+    UNKNOWN = "UNKNOWN"
 
 
 @dataclass
@@ -78,7 +80,7 @@ class BuildInfo:
 
     number: int
     status: BuildStatus
-    result: Optional[str]
+    result: str | None
     duration: int  # 秒
 
 
@@ -107,7 +109,7 @@ class JenkinsClient:
     """
 
     def __init__(
-        self, url: str, token: str, username: str = "admin", timeout: int = 30
+        self, url: str, token: str, username: str = "admin", timeout: int = 6
     ):
         """
         初始化 Jenkins 客户端
@@ -121,6 +123,17 @@ class JenkinsClient:
         # 创建 Session 以保持连接和 Cookie
         self.session = requests.Session()
 
+        # 配置 HTTP 重试策略
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[500, 502, 503, 504],
+            allowed_methods=["GET"],  # 仅 GET 重试，POST 不重试避免重复触发
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
+
         # 设置认证：Jenkins 使用 HTTP Basic Auth
         # 用户名和密码使用 API Token
         self.session.auth = (username, token)
@@ -133,6 +146,10 @@ class JenkinsClient:
 
         # 缓存 Git Parameter 参数名查询结果 {job_path: set[str]}
         self._git_param_cache: dict[str, set[str]] = {}
+
+        # 缓存 CSRF Crumb
+        self._crumb_cache: tuple[str, str] | None = None
+        self._crumb_time: float = 0
 
     # ========================================================================
     # 公共方法：查询 Git Parameter 参数名
@@ -199,7 +216,7 @@ class JenkinsClient:
     # 私有方法：CSRF Token 处理
     # ========================================================================
 
-    def _get_crumb(self) -> Optional[tuple[str, str]]:
+    def _get_crumb(self) -> tuple[str, str] | None:
         """
         获取 CSRF Token（Crumb）
 
@@ -207,6 +224,8 @@ class JenkinsClient:
         Crumb 是一种简单的 CSRF 防护机制：
         1. 客户端先 GET /crumbIssuer/api/json 获取 crumb
         2. 然后在 POST 请求头中携带 crumb
+
+        结果会缓存 30 分钟，避免频繁请求 crumb 接口。
 
         Returns:
             元组 (字段名, crumb值)，如 ("Jenkins-Crumb", "abc123")
@@ -216,18 +235,25 @@ class JenkinsClient:
             有些 Jenkins 实例可能禁用了 CSRF 保护，此时返回 None
             调用方应该处理 None 的情况
         """
+        # 检查缓存是否有效（30 分钟 TTL）
+        if self._crumb_cache is not None and time.time() - self._crumb_time < 1800:
+            return self._crumb_cache
+
         try:
             resp = self.session.get(
                 f"{self.base_url}/crumbIssuer/api/json", timeout=self.timeout
             )
             if resp.ok:
                 data = resp.json()
-                # 返回 (字段名, crumb值)
-                # 有些实例可能使用不同的字段名
-                return (
-                    data.get("crumbRequestField", "Jenkins-Crumb"),
-                    data.get("crumb"),
-                )
+                crumb_value = data.get("crumb")
+                if crumb_value:
+                    result = (
+                        data.get("crumbRequestField", "Jenkins-Crumb"),
+                        crumb_value,
+                    )
+                    self._crumb_cache = result
+                    self._crumb_time = time.time()
+                    return result
         except Exception:
             # 忽略错误，让调用方处理 None 的情况
             pass
@@ -239,7 +265,7 @@ class JenkinsClient:
 
     def trigger_build(
         self, job_path: str, params: dict
-    ) -> tuple[Optional[str], str]:
+    ) -> tuple[str | None, str]:
         """
         触发 Jenkins 构建
 
@@ -322,6 +348,45 @@ class JenkinsClient:
                 queue_url = resp.headers.get("Location")
                 log_debug(f"队列 URL: {queue_url}")
                 return queue_url, ""
+            elif resp.status_code == 403:
+                # 403 可能是 crumb 过期，清除缓存并重试一次
+                log_debug("收到 403，清除 crumb 缓存并重试")
+                # 先移除旧的 crumb header，防止新 crumb 为 None 时残留
+                if self._crumb_cache is not None:
+                    headers.pop(self._crumb_cache[0], None)
+                self._crumb_cache = None
+                crumb = self._get_crumb()
+                if crumb:
+                    headers[crumb[0]] = crumb[1]
+                else:
+                    log_warn("403 重试: 无法获取新的 CSRF crumb，将尝试无 crumb 请求")
+                try:
+                    resp = self.session.post(
+                        url,
+                        data=effective_params,
+                        headers=headers,
+                        timeout=self.timeout,
+                        allow_redirects=False,
+                    )
+                    if resp.status_code == 201:
+                        queue_url = resp.headers.get("Location")
+                        log_debug(f"重试成功，队列 URL: {queue_url}")
+                        return queue_url, ""
+                except Exception as retry_e:
+                    log_debug(f"重试异常: {retry_e}")
+                    # 重试异常时，诊断信息应包含重试异常而非原始 403
+                    diagnostic = (
+                        f"请求URL: {url}\n"
+                        f"重试异常: {retry_e}"
+                    )
+                    return None, diagnostic
+                log_debug(f"重试仍失败，响应内容: {resp.text[:500]}")
+                diagnostic = (
+                    f"请求URL: {url}\n"
+                    f"状态码: {resp.status_code}\n"
+                    f"响应内容: {resp.text[:500]}"
+                )
+                return None, diagnostic
             else:
                 log_debug(f"触发失败，响应内容: {resp.text[:500]}")
                 diagnostic = (
@@ -330,6 +395,10 @@ class JenkinsClient:
                     f"响应内容: {resp.text[:500]}"
                 )
                 return None, diagnostic
+        except requests.exceptions.RetryError as e:
+            log_debug(f"触发异常（重试耗尽）: {e}")
+            diagnostic = f"请求URL: {url}\n重试耗尽: {e}"
+            return None, diagnostic
         except Exception as e:
             log_debug(f"触发异常: {e}")
             diagnostic = f"请求URL: {url}\n异常: {e}"
@@ -339,7 +408,7 @@ class JenkinsClient:
     # 公共方法：获取构建编号
     # ========================================================================
 
-    def get_build_number(self, queue_url: str, timeout: int = 30) -> Optional[int]:
+    def get_build_number(self, queue_url: str, timeout: int = 30) -> int | None:
         """
         从队列中获取构建编号
 
@@ -363,34 +432,31 @@ class JenkinsClient:
             >>> print(build_num)
             789
         """
-        # 轮询 timeout 次，每次间隔 1 秒
-        for i in range(timeout):
+        # 基于 elapsed 时间轮询，每次间隔 3 秒
+        start = time.time()
+        poll_count = 0
+        while time.time() - start < timeout:
+            poll_count += 1
             try:
                 api_url = f"{queue_url.rstrip('/')}/api/json"
-                log_debug(f"查询队列: {api_url} (第 {i + 1}/{timeout} 次)")
-
+                log_debug(f"查询队列: {api_url} (第 {poll_count} 次)")
                 resp = self.session.get(api_url, timeout=self.timeout)
                 if resp.ok:
                     data = resp.json()
                     log_debug(f"队列响应: {data}")
-
-                    # 检查是否被取消
                     if data.get("cancelled"):
                         log_debug("构建已被取消")
                         return None
-
-                    # 检查是否已分配执行器
                     executable = data.get("executable")
                     if executable and executable.get("number"):
                         build_num = executable["number"]
                         log_debug(f"已分配构建编号: #{build_num}")
                         return build_num
-
+            except requests.exceptions.RetryError as e:
+                log_debug(f"查询队列异常（重试耗尽）: {e}")
             except Exception as e:
                 log_debug(f"查询队列异常: {e}")
-
-            # 等待 1 秒后重试
-            time.sleep(1)
+            time.sleep(3)
 
         log_debug("获取构建编号超时")
         return None
@@ -457,12 +523,14 @@ class JenkinsClient:
                 )
             else:
                 log_debug(f"查询状态失败: HTTP {resp.status_code}")
+        except requests.exceptions.RetryError as e:
+            log_debug(f"查询状态异常（重试耗尽）: {e}")
         except Exception as e:
             log_debug(f"查询状态异常: {e}")
 
-        # 请求失败时返回默认状态
+        # 请求失败时返回 UNKNOWN 状态（而非 BUILDING）
         return BuildInfo(
-            number=build_num, status=BuildStatus.BUILDING, result=None, duration=0
+            number=build_num, status=BuildStatus.UNKNOWN, result=None, duration=0
         )
 
     # ========================================================================
@@ -504,7 +572,45 @@ class JenkinsClient:
                 return log_content
             else:
                 log_debug(f"获取日志失败: HTTP {resp.status_code}")
+        except requests.exceptions.RetryError as e:
+            log_debug(f"获取日志异常（重试耗尽）: {e}")
         except Exception as e:
             log_debug(f"获取日志异常: {e}")
 
         return ""
+
+    # ========================================================================
+    # 公共方法：Jenkins 连接预检
+    # ========================================================================
+
+    def health_check(self) -> bool:
+        """
+        检查 Jenkins 服务器是否可达
+
+        Returns:
+            True 如果 Jenkins 可达
+
+        Raises:
+            ConnectionError: 如果 Jenkins 不可达
+        """
+        try:
+            resp = self.session.get(
+                f"{self.base_url}/api/json", timeout=self.timeout
+            )
+            if resp.ok:
+                return True
+            raise ConnectionError(
+                f"Jenkins 服务器返回异常状态: HTTP {resp.status_code}"
+            )
+        except requests.exceptions.RetryError as e:
+            raise ConnectionError(
+                f"Jenkins 服务器多次重试后仍不可达: {self.base_url}"
+            ) from e
+        except requests.exceptions.ConnectionError as e:
+            raise ConnectionError(
+                f"无法连接到 Jenkins 服务器: {self.base_url}"
+            ) from e
+        except requests.exceptions.Timeout as e:
+            raise ConnectionError(
+                f"连接 Jenkins 服务器超时: {self.base_url}"
+            ) from e

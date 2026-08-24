@@ -72,6 +72,9 @@ def _from_dict(data: dict[str, Any]) -> Config:
         token=server_data.get("token", ""),
     )
 
+    # 验证必填字段
+    _validate_config(server)
+
     # BuildConfig
     build_data = data.get("build", {})
     build = BuildConfig(
@@ -82,6 +85,7 @@ def _from_dict(data: dict[str, Any]) -> Config:
         curl_timeout=build_data.get("curl_timeout", 30),
         log_dir=build_data.get("log_dir", "./jenkins_logs"),
         log_retention_days=build_data.get("log_retention_days", 3),
+        max_parallel=build_data.get("max_parallel", 5),
     )
 
     # branch_field
@@ -99,6 +103,22 @@ def _from_dict(data: dict[str, Any]) -> Config:
         branch_field=branch_field,
         environments=environments,
     )
+
+
+def _validate_config(server: ServerConfig):
+    """
+    验证配置必填字段
+
+    Args:
+        server: 服务器配置对象
+
+    Raises:
+        ValueError: 必填字段为空时抛出
+    """
+    if not isinstance(server.url, str) or not server.url.strip():
+        raise ValueError("配置错误: server.url 不能为空")
+    if not isinstance(server.token, str) or not server.token.strip():
+        raise ValueError("配置错误: server.token 不能为空")
 
 
 def _build_environment(
@@ -274,6 +294,7 @@ def config_to_dict(config: Config) -> dict[str, Any]:
             "curl_timeout": config.build.curl_timeout,
             "log_dir": config.build.log_dir,
             "log_retention_days": config.build.log_retention_days,
+            "max_parallel": config.build.max_parallel,
         },
     }
 
@@ -317,6 +338,7 @@ def generate_template() -> dict[str, Any]:
             "curl_timeout": 30,
             "log_dir": "./jenkins_logs",
             "log_retention_days": 3,
+            "max_parallel": 5,
         },
         "branch_field": "branch",
         "environments": {

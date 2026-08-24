@@ -78,7 +78,7 @@ class Builder:
         """
         results = []
 
-        with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
+        with ThreadPoolExecutor(max_workers=min(len(jobs), max(1, self.config.build.max_parallel))) as executor:
             future_to_job = {
                 executor.submit(self._build_single, job, log_dir): job
                 for job in jobs
@@ -244,6 +244,7 @@ class Builder:
         start = time.time()
         timeout = self.config.build.build_timeout
         poll_interval = self.config.build.poll_interval
+        unknown_count = 0
 
         while True:
             elapsed = time.time() - start
@@ -258,6 +259,22 @@ class Builder:
                 BuildStatus.ABORTED,
             ):
                 return info.status
+
+            if info.status == BuildStatus.UNKNOWN:
+                unknown_count += 1
+                if unknown_count >= 3:
+                    log_error(
+                        f"连续 {unknown_count} 次状态查询失败: "
+                        f"{job.key} (#{build_num})"
+                    )
+                    return BuildStatus.FAILURE
+                log_warn(
+                    f"状态查询失败 ({unknown_count}/3): "
+                    f"{job.key} (#{build_num})"
+                )
+            else:
+                # BUILDING 状态，重置计数器
+                unknown_count = 0
 
             mins, secs = divmod(int(elapsed), 60)
             log_info(f"监控中：{job.key} (#{build_num}) - 已运行 {mins}分{secs}秒")

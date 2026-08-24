@@ -85,53 +85,13 @@ def run_build(config_file: Path, args):
             log_warn("已取消构建")
             sys.exit(130)
 
-    _cleanup_old_logs(config.build.log_dir, config.build.log_retention_days)
-
-    log_dir = Path(config.build.log_dir) / f"build_{datetime.now().strftime('%Y%m%d')}"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_info(f"日志目录: {log_dir}")
-
     # 覆盖参数 -p
-    if args.params:
+    if getattr(args, "params", None):
         override_params = _parse_params_field(args.params)
         for job in jobs:
             job.params.update(override_params)
 
-    client = JenkinsClient(
-        url=config.server.url,
-        username=config.server.username,
-        token=config.server.token,
-        timeout=config.build.curl_timeout,
-    )
-    builder = Builder(client, config)
-
-    if args.mode == "parallel":
-        results = builder.build_parallel(jobs, str(log_dir))
-    else:
-        results = builder.build_sequential(jobs, str(log_dir))
-
-    # 保存历史记录
-    history_file = config_file.parent / "data" / "build_history.json"
-    manager = HistoryManager(str(history_file))
-
-    for result in results:
-        job = next((j for j in jobs if j.key == result.job_key), None)
-        manager.add(
-            BuildRecord(
-                timestamp=datetime.now().isoformat(timespec="seconds"),
-                env=job.env if job else "",
-                job_key=result.job_key,
-                build_num=result.build_num,
-                status=result.status.value,
-                duration=result.duration,
-                log_file=result.log_file,
-                branch=result.branch,
-                params=result.params,
-                project_name=result.project_name,
-            )
-        )
-
-    generate_report(results, str(log_dir))
+    _execute_build(config, jobs, config_file, args)
 
 
 def run_rebuild_last(config_file: Path, args):
@@ -183,6 +143,21 @@ def run_rebuild_last(config_file: Path, args):
             log_warn("已取消重建")
             sys.exit(130)
 
+    _execute_build(config, jobs, config_file, args)
+
+
+def _execute_build(config, jobs, config_file, args):
+    """
+    公共构建执行逻辑
+
+    包含：日志清理、日志目录创建、客户端创建、构建执行、历史保存、报告生成。
+
+    Args:
+        config: Config 对象
+        jobs: Job 列表
+        config_file: 配置文件路径
+        args: CLI 参数
+    """
     _cleanup_old_logs(config.build.log_dir, config.build.log_retention_days)
 
     log_dir = Path(config.build.log_dir) / f"build_{datetime.now().strftime('%Y%m%d')}"
@@ -195,6 +170,14 @@ def run_rebuild_last(config_file: Path, args):
         token=config.server.token,
         timeout=config.build.curl_timeout,
     )
+
+    # 构建前检查 Jenkins 连接
+    try:
+        client.health_check()
+    except ConnectionError as e:
+        log_error(str(e))
+        sys.exit(1)
+
     builder = Builder(client, config)
 
     if args.mode == "parallel":
@@ -202,9 +185,14 @@ def run_rebuild_last(config_file: Path, args):
     else:
         results = builder.build_sequential(jobs, str(log_dir))
 
+    # 批量保存历史记录
+    history_file = config_file.parent / "data" / "build_history.json"
+    manager = HistoryManager(str(history_file))
+
+    records = []
     for result in results:
         job = next((j for j in jobs if j.key == result.job_key), None)
-        manager.add(
+        records.append(
             BuildRecord(
                 timestamp=datetime.now().isoformat(timespec="seconds"),
                 env=job.env if job else "",
@@ -218,6 +206,7 @@ def run_rebuild_last(config_file: Path, args):
                 project_name=result.project_name,
             )
         )
+    manager.add_batch(records)
 
     generate_report(results, str(log_dir))
 

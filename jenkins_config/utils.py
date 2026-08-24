@@ -28,6 +28,23 @@ try:
 except ImportError:
     pass
 
+from questionary import Style
+
+# 交互式命令行统一样式
+CUSTOM_STYLE = Style(
+    [
+        ("qmark", "fg:cyan bold"),
+        ("question", "fg:white bold"),
+        ("answer", "fg:green bold"),
+        ("pointer", "fg:cyan bold"),
+        ("highlighted", "fg:cyan bold"),
+        ("selected", "fg:green"),
+        ("separator", "fg:gray"),
+        ("instruction", "fg:gray"),
+        ("text", "fg:white"),
+    ]
+)
+
 
 DEBUG_MODE = False
 

@@ -73,14 +73,16 @@ def test_trigger_build_network_error(client):
 
 
 def test_get_build_number(client):
-    with patch.object(client.session, "get") as mock_get:
+    with patch.object(client.session, "get") as mock_get, \
+         patch("jenkins_config.jenkins.time.sleep"):
         # 第一次返回空，第二次返回编号
         mock_get.return_value.json.side_effect = [
             {"cancelled": False, "executable": None},
             {"cancelled": False, "executable": {"number": 456}},
         ]
+        # timeout 需要足够覆盖多次轮询（轮询间隔 3 秒）
         result = client.get_build_number(
-            "http://localhost:8080/queue/item/123/", timeout=2
+            "http://localhost:8080/queue/item/123/", timeout=10
         )
         assert result == 456
 
@@ -180,19 +182,19 @@ def test_get_build_status_building(client):
 
 
 def test_get_build_status_http_error(client):
-    """查询状态 HTTP 错误时返回 BUILDING"""
+    """查询状态 HTTP 错误时返回 UNKNOWN"""
     with patch.object(client.session, "get") as mock_get:
         mock_get.return_value.ok = False
         info = client.get_build_status("test-job", 999)
-        assert info.status == BuildStatus.BUILDING
+        assert info.status == BuildStatus.UNKNOWN
 
 
 def test_get_build_status_exception(client):
-    """状态查询异常时返回 BUILDING"""
+    """状态查询异常时返回 UNKNOWN"""
     with patch.object(client.session, "get") as mock_get:
         mock_get.side_effect = Exception("Status API error")
         info = client.get_build_status("test-job", 999)
-        assert info.status == BuildStatus.BUILDING
+        assert info.status == BuildStatus.UNKNOWN
 
 
 # ============================================================================

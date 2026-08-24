@@ -9,24 +9,9 @@ import sys
 from pathlib import Path
 
 import questionary
-from questionary import Style
 
 from .config import Config
-from .utils import log_error, log_info, log_warn, print_header, print_sep
-
-CUSTOM_STYLE = Style(
-    [
-        ("qmark", "fg:cyan bold"),
-        ("question", "fg:white bold"),
-        ("answer", "fg:green bold"),
-        ("pointer", "fg:cyan bold"),
-        ("highlighted", "fg:cyan bold"),
-        ("selected", "fg:green"),
-        ("separator", "fg:gray"),
-        ("instruction", "fg:gray"),
-        ("text", "fg:white"),
-    ]
-)
+from .utils import CUSTOM_STYLE, log_error, log_info, log_warn, print_header, print_sep
 
 
 def run_interactive_build(config_file: Path, args):

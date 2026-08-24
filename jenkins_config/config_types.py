@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .history import BuildRecord
@@ -43,6 +43,7 @@ class BuildConfig:
         curl_timeout: HTTP 请求超时（秒）
         log_dir: 日志目录
         log_retention_days: 日志保留天数
+        max_parallel: 最大并行构建数（默认: 5）
     """
 
     mode: str = "parallel"
@@ -52,6 +53,7 @@ class BuildConfig:
     curl_timeout: int = 30
     log_dir: str = "./jenkins_logs"
     log_retention_days: int = 3
+    max_parallel: int = 5
 
 
 @dataclass
@@ -112,7 +114,7 @@ class Job:
     key: str
     path: str
     branch: str
-    params: dict
+    params: dict[str, Any]
     env: str
     project_name: str = ""
 
@@ -151,16 +153,16 @@ class Config:
 
         def get_jobs(
             self,
-            env: Optional[str] = None,
-            jobs: Optional[list[str]] = None,
+            env: str | None = None,
+            jobs: list[str] | None = None,
         ) -> list[Job]: ...
 
         def list_environments(self) -> list[tuple[str, str]]: ...
 
         def list_projects(
-            self, env: Optional[str] = None
+            self, env: str | None = None
         ) -> list[tuple[str, str, str]]: ...
 
         def create_job_from_record(
             self, record: BuildRecord
-        ) -> Optional[Job]: ...
+        ) -> Job | None: ...
