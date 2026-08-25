@@ -45,10 +45,10 @@ Jenkins 返回 400（Bad Request）通常是因为参数值不合法：
 先用自检模式确认解析到了什么命令（只打印，不真正启动）：
 
 ```bash
-JENKINS_MCP_LAUNCHER_DRYRUN=1 npx -y jenkins-config-mcp
+JENKINS_MCP_LAUNCHER_DRYRUN=1 npx -y @zythegit/jenkins-config-mcp
 ```
 
-- **`npm error 404 Not Found ... jenkins-config-mcp`** — npm 包尚未发布，或用了错误的包名
+- **`npm error 404 Not Found ... @zythegit/jenkins-config-mcp`** — npm 包尚未发布，或用了错误的包名（注意有 `@zythegit/` 前缀）
 - **sha256 校验失败** — 下载被中间层篡改或 Release 资产被替换；不要用 `JENKINS_MCP_SKIP_CHECKSUM=1` 绕过，先确认来源
 - **下载 404** — 目标 tag 的 Release 不存在该平台资产，用 `JENKINS_MCP_VERSION` 显式指定一个存在的 tag
 - **macOS 提示无法验证开发者** — 二进制未签名公证，`xattr -d com.apple.quarantine <缓存路径>` 后重试

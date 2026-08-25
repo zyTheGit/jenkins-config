@@ -15,7 +15,7 @@
   "mcpServers": {
     "jenkins-build": {
       "command": "npx",
-      "args": ["-y", "jenkins-config-mcp"]
+      "args": ["-y", "@zythegit/jenkins-config-mcp"]
     }
   }
 }
@@ -30,7 +30,7 @@
   "mcpServers": {
     "jenkins-build": {
       "command": "npx",
-      "args": ["-y", "jenkins-config-mcp"],
+      "args": ["-y", "@zythegit/jenkins-config-mcp"],
       "env": { "JENKINS_MCP_ALLOW_WRITE": "1" }
     }
   }
@@ -40,7 +40,7 @@
 排查启动问题（只打印解析出的命令，不真正启动）：
 
 ```bash
-JENKINS_MCP_LAUNCHER_DRYRUN=1 npx -y jenkins-config-mcp
+JENKINS_MCP_LAUNCHER_DRYRUN=1 npx -y @zythegit/jenkins-config-mcp
 ```
 
 ### 源码 / 已安装包（需要 Python）

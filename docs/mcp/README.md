@@ -47,7 +47,7 @@ pip install "jenkins-config[mcp]"
 
 ### 3.2 通过 npx 一键运行（推荐给使用方，无需 Python）
 
-面向"只想在 MCP 客户端里填一行配置"的使用方。`npm/` 目录下的启动器包 `jenkins-config-mcp`
+面向"只想在 MCP 客户端里填一行配置"的使用方。`npm/` 目录下的启动器包 `@zythegit/jenkins-config-mcp`
 首次运行时会从 GitHub Release 下载当前平台的预编译二进制（PyInstaller 打包，**自带 Python 运行时**），
 校验 sha256 后缓存复用，因此目标机器只需 Node.js 18+：
 
@@ -56,7 +56,7 @@ pip install "jenkins-config[mcp]"
   "mcpServers": {
     "jenkins-build": {
       "command": "npx",
-      "args": ["-y", "jenkins-config-mcp"]
+      "args": ["-y", "@zythegit/jenkins-config-mcp"]
     }
   }
 }
@@ -75,7 +75,7 @@ pip install "jenkins-config[mcp]"
 启动器自身的日志一律写 stderr，stdout 只承载 MCP 的 JSON-RPC 报文。排查启动问题时可先看解析结果：
 
 ```bash
-JENKINS_MCP_LAUNCHER_DRYRUN=1 npx -y jenkins-config-mcp
+JENKINS_MCP_LAUNCHER_DRYRUN=1 npx -y @zythegit/jenkins-config-mcp
 ```
 
 可用环境变量：

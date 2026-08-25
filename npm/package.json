@@ -1,5 +1,5 @@
 {
-  "name": "jenkins-config-mcp",
+  "name": "@zythegit/jenkins-config-mcp",
   "version": "1.6.0",
   "description": "npx launcher for the jenkins-config MCP Server (Python)",
   "bin": {
