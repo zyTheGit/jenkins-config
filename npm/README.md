@@ -1,4 +1,4 @@
-# jenkins-config-mcp
+# @zythegit/jenkins-config-mcp
 
 `jenkins-config` MCP Server 的一键启动器。**目标机器只需要 Node.js 18+，不需要 Python。**
 
@@ -13,7 +13,7 @@ MCP Server 本体是 Python 实现，但发布物是 PyInstaller 打出的单文
   "mcpServers": {
     "jenkins-build": {
       "command": "npx",
-      "args": ["-y", "jenkins-config-mcp"]
+      "args": ["-y", "@zythegit/jenkins-config-mcp"]
     }
   }
 }
