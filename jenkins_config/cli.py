@@ -8,6 +8,8 @@
 import sys
 from pathlib import Path
 
+from .paths import resolve_config_file, resolve_relative
+
 # 懒导入：Config 和 utils 仅在 main() 内部导入，避免启动时加载整个配置模块链
 # （config → config_io → config_types + yaml，约 0.16s）
 
@@ -184,30 +186,13 @@ def _resolve_config(config_arg: str) -> Path:
             return path
         return _resolve_relative(path)
 
-    # 自动检测：优先 .yaml，降级 .json
-    for name in ("jenkins-config.yaml", "jenkins-config.yml", "jenkins-config.json"):
-        path = _resolve_relative(Path(name))
-        if path.exists():
-            return path
-
-    # 都不存在，返回 yaml 路径以便报错
-    return _resolve_relative(Path("jenkins-config.yaml"))
+    # 自动检测：由 paths 模块统一按候选目录 + 候选文件名探测
+    return resolve_config_file()
 
 
 def _resolve_relative(config_file: Path) -> Path:
-    """根据运行模式解析相对路径"""
-    if getattr(sys, "frozen", False):
-        # PyInstaller exe 模式：cwd 优先，再试 exe 目录
-        cwd_config = Path.cwd() / config_file
-        if cwd_config.exists():
-            return cwd_config
-        exe_config = Path(sys.executable).parent / config_file
-        if exe_config.exists():
-            return exe_config
-        return cwd_config
-    else:
-        # 源码模式：相对于项目根目录
-        return Path(__file__).parent.parent / config_file
+    """根据运行模式解析相对路径（委托 paths 模块，保持 CLI 与 MCP 规则一致）"""
+    return resolve_relative(config_file)
 
 
 if __name__ == "__main__":

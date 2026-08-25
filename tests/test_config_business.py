@@ -243,3 +243,55 @@ def test_config_defaults():
     c = Config()
     assert c.branch_field == "branch"
     assert c.environments == {}
+
+
+# ============================================================================
+# branch_field_for / project_name_from_job_key
+# ============================================================================
+
+
+def test_branch_field_for_falls_back_to_global(tmp_path):
+    """环境未配置 branch_field 时回落到全局配置"""
+    config_file = _setup_config(tmp_path)
+    config = Config.load(str(config_file))
+    assert config.branch_field_for("dev") == config.branch_field
+    assert config.branch_field_for(None) == config.branch_field
+    assert config.branch_field_for("nonexistent") == config.branch_field
+
+
+def test_branch_field_for_env_override(tmp_path):
+    """环境级 branch_field 优先于全局"""
+    config_file = tmp_path / "override.yaml"
+    config_file.write_text(
+        "server:\n"
+        '  url: "http://localhost:8080"\n'
+        '  token: "token"\n'
+        "branch_field: branch\n"
+        "environments:\n"
+        "  dev:\n"
+        "    branch_field: GIT_BRANCH\n"
+        "    projects:\n"
+        "      - name: project-a\n"
+        "  test:\n"
+        "    projects:\n"
+        "      - name: project-b\n",
+        encoding="utf-8",
+    )
+    config = Config.load(str(config_file))
+    assert config.branch_field_for("dev") == "GIT_BRANCH"
+    assert config.branch_field_for("test") == "branch"
+
+
+def test_project_name_from_job_key():
+    """job_key 反推项目名：下划线还原为短横线"""
+    from jenkins_config.config import project_name_from_job_key
+    assert project_name_from_job_key("dev", "dev_project_a") == "project-a"
+    assert project_name_from_job_key("dev", "dev_app") == "app"
+
+
+def test_project_name_from_job_key_invalid():
+    """前缀不匹配、env 为空或名称为空时返回 None"""
+    from jenkins_config.config import project_name_from_job_key
+    assert project_name_from_job_key("dev", "test_project_a") is None
+    assert project_name_from_job_key("", "dev_project_a") is None
+    assert project_name_from_job_key("dev", "dev_") is None

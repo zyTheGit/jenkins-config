@@ -302,3 +302,138 @@ def test_trigger_build_success_with_crumb_and_debug(client):
             assert diagnostic == ""
     finally:
         set_debug_mode(False)
+
+
+# ============================================================================
+# 资源释放：close / 上下文管理器
+# ============================================================================
+
+
+def test_close_closes_session(client):
+    """close() 应关闭底层 session"""
+    with patch.object(client.session, "close") as mock_close:
+        client.close()
+        mock_close.assert_called_once()
+
+
+def test_close_swallows_session_error(client):
+    """session.close 抛错不应向上传播"""
+    with patch.object(client.session, "close", side_effect=OSError("boom")):
+        client.close()  # 不抛异常
+
+
+def test_context_manager_closes_on_exit():
+    """退出 with 块时自动调用 close()"""
+    with patch.object(JenkinsClient, "close") as mock_close:
+        with JenkinsClient("http://localhost:8080", "t", "admin") as c:
+            assert isinstance(c, JenkinsClient)
+        mock_close.assert_called_once()
+
+
+def test_context_manager_does_not_suppress_exception():
+    """__exit__ 返回 False，不吞上下文中的异常"""
+    with patch.object(JenkinsClient, "close"):
+        with pytest.raises(ValueError):
+            with JenkinsClient("http://localhost:8080", "t", "admin"):
+                raise ValueError("boom")
+
+
+# ============================================================================
+# get_build_log：max_bytes 尾部截断
+# ============================================================================
+
+
+def _stream_response(chunks, ok=True):
+    """构造支持上下文管理器与 iter_content 的响应 mock"""
+    from unittest.mock import MagicMock
+    resp = MagicMock()
+    resp.ok = ok
+    resp.iter_content.return_value = iter(chunks)
+    resp.__enter__.return_value = resp
+    resp.__exit__.return_value = False
+    return resp
+
+
+def test_get_build_log_no_limit_uses_text(client):
+    """未指定 max_bytes 时直接读取完整文本，不启用流式"""
+    with patch.object(client.session, "get") as mock_get:
+        mock_get.return_value.ok = True
+        mock_get.return_value.text = "full log"
+        assert client.get_build_log("job", 1) == "full log"
+        assert mock_get.call_args.kwargs.get("stream") is None
+
+
+def test_get_build_log_tail_truncates(client):
+    """超过 max_bytes 时只保留尾部并带截断说明"""
+    chunks = [b"a" * 100, b"b" * 100]
+    with patch.object(client.session, "get", return_value=_stream_response(chunks)):
+        log = client.get_build_log("job", 1, max_bytes=50)
+
+    assert "日志已截断" in log
+    assert "原始长度 200 字节" in log
+    assert log.endswith("b" * 50)
+
+
+def test_get_build_log_tail_no_truncation_when_small(client):
+    """未超过 max_bytes 时不加截断说明"""
+    with patch.object(client.session, "get", return_value=_stream_response([b"short"])):
+        log = client.get_build_log("job", 1, max_bytes=1024)
+
+    assert log == "short"
+
+
+def test_get_build_log_tail_http_error(client):
+    """流式获取日志遇到 HTTP 错误时返回空字符串"""
+    with patch.object(
+        client.session, "get", return_value=_stream_response([b"x"], ok=False)
+    ):
+        assert client.get_build_log("job", 1, max_bytes=1024) == ""
+
+
+def test_get_build_log_tail_sends_suffix_range(client):
+    """限制字节数时用 Range: bytes=-N 请求，只让服务端传输尾部"""
+    with patch.object(
+        client.session, "get", return_value=_stream_response([b"tail"])
+    ) as mock_get:
+        client.get_build_log("job", 1, max_bytes=2048)
+
+    assert mock_get.call_args.kwargs["headers"]["Range"] == "bytes=-2048"
+    assert mock_get.call_args.kwargs["stream"] is True
+
+
+def test_get_build_log_tail_uses_content_range_total(client):
+    """服务端返回 206 时原始长度取自 Content-Range，而非已下载字节数"""
+    resp = _stream_response([b"b" * 50])
+    resp.status_code = 206
+    resp.headers = {"Content-Range": "bytes 950-999/1000"}
+
+    with patch.object(client.session, "get", return_value=resp):
+        log = client.get_build_log("job", 1, max_bytes=50)
+
+    assert "原始长度 1000 字节" in log
+    assert log.endswith("b" * 50)
+
+
+def test_parse_content_range_total_handles_unknown_size():
+    """Content-Range 总长度未知（*）或格式异常时返回 0"""
+    from jenkins_config.jenkins import _parse_content_range_total
+
+    assert _parse_content_range_total("bytes 0-49/1000") == 1000
+    assert _parse_content_range_total("bytes 0-49/*") == 0
+    assert _parse_content_range_total("") == 0
+
+
+def test_redact_headers_masks_session_credentials():
+    """调试日志中的 Set-Cookie / Authorization 必须脱敏"""
+    from jenkins_config.jenkins import _redact_headers
+
+    redacted = _redact_headers({
+        "Set-Cookie": "JSESSIONID=abc; Path=/",
+        "Authorization": "Basic dXNlcjp0b2tlbg==",
+        "Location": "http://jenkins/queue/item/1/",
+    })
+
+    assert redacted["Set-Cookie"] == "***"
+    assert redacted["Authorization"] == "***"
+    assert redacted["Location"] == "http://jenkins/queue/item/1/"
+

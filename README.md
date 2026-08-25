@@ -166,6 +166,30 @@ jenkins-build.exe --list-envs
 jenkins-build.exe -c /path/to/config.yaml --list-envs
 ```
 
+## MCP Server（AI Agent 集成）
+
+本项目提供 MCP（Model Context Protocol）Server，将构建能力暴露给 AI Agent（Claude Desktop、Cursor 等）。共 11 个工具（环境/项目/配置查询、构建触发、状态与日志查询、历史统计、重建上次构建等）、4 个只读 Resources、2 个 Prompts。
+
+```bash
+# 安装 MCP 可选依赖
+uv sync --extra mcp
+```
+
+MCP 客户端最小配置示例：
+
+```json
+{
+  "mcpServers": {
+    "jenkins-build": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/jenkins-config", "jenkins-config-mcp"]
+    }
+  }
+}
+```
+
+完整文档（工具参数、配置路径解析规则、并发注意事项、调试与测试）见 [docs/mcp/README.md](docs/mcp/README.md)。
+
 ## 项目结构
 
 ```
