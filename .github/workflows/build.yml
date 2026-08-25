@@ -119,3 +119,44 @@ jobs:
           # 带连字符的 tag（v1.0.0-rc.1 等）视为预发布
           prerelease: ${{ contains(github.ref_name, '-') }}
 
+  # npx 启动器要能下到二进制，所以必须等 release job 把资产传完
+  publish-npm:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm provenance 需要
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Check NPM_TOKEN
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "::error::缺少 NPM_TOKEN secret，无法发布。在仓库 Settings → Secrets 添加 npm Automation token。"
+            exit 1
+          fi
+
+      # tag 是版本的唯一来源，避免 package.json 与 Release 资产版本漂移
+      - name: Sync package version with tag
+        working-directory: npm
+        env:
+          TAG: ${{ github.ref_name }}
+        run: npm version "${TAG#v}" --no-git-tag-version --allow-same-version
+
+      - name: Publish to npm
+        working-directory: npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # 预发布版本发到 next 频道，不抢占 latest
+          DIST_TAG: ${{ contains(github.ref_name, '-') && 'next' || 'latest' }}
+        run: npm publish --provenance --access public --tag "$DIST_TAG"
+
+
