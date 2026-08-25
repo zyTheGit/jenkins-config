@@ -30,11 +30,27 @@ jobs:
   build:
     needs: test
     strategy:
+      fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - windows-latest
-          - macos-latest
+        include:
+          - os: ubuntu-latest
+            suffix: linux-x64
+            targets: all
+            cli_asset: jenkins-build-linux
+          - os: ubuntu-24.04-arm
+            suffix: linux-arm64
+            targets: mcp
+          - os: macos-13
+            suffix: macos-x64
+            targets: mcp
+          - os: macos-latest
+            suffix: macos-arm64
+            targets: all
+            cli_asset: jenkins-build-macos
+          - os: windows-latest
+            suffix: win-x64
+            targets: all
+            cli_asset: jenkins-build-win.exe
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -48,18 +64,33 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --extra dev --extra mcp
 
-      - name: Build binary
-        run: uv run python build.py
+      - name: Build binaries
+        run: uv run python build.py --target ${{ matrix.targets }}
         env:
           PYTHONIOENCODING: utf-8
+
+      - name: Collect release assets
+        shell: bash
+        env:
+          SUFFIX: ${{ matrix.suffix }}
+          CLI_ASSET: ${{ matrix.cli_asset }}
+        run: |
+          mkdir -p release
+          ext=""
+          if [ "$RUNNER_OS" = "Windows" ]; then ext=".exe"; fi
+          mv "dist/jenkins-config-mcp$ext" "release/jenkins-config-mcp-$SUFFIX$ext"
+          if [ -n "$CLI_ASSET" ]; then
+            mv "dist/jenkins-build$ext" "release/$CLI_ASSET"
+          fi
+          ls -l release
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: jenkins-build-${{ runner.os }}
-          path: dist/
+          name: release-${{ matrix.suffix }}
+          path: release/
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -70,14 +101,14 @@ jobs:
     steps:
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          pattern: release-*
+          merge-multiple: true
 
-      - name: Prepare release assets with unique names
-        shell: bash
-        run: |
-          mkdir -p release-assets
-          cp jenkins-build-Linux/jenkins-build release-assets/jenkins-build-linux
-          cp jenkins-build-macOS/jenkins-build release-assets/jenkins-build-macos
-          cp jenkins-build-Windows/jenkins-build.exe release-assets/jenkins-build-win.exe
+      - name: Generate checksums
+        working-directory: release-assets
+        run: sha256sum * > checksums.txt
 
       - name: Create Release and upload assets
         uses: softprops/action-gh-release@v2

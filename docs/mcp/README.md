@@ -21,8 +21,9 @@ Jenkins MCP Server 将 Jenkins 自动构建 CLI 工具的能力暴露为 [Model 
 
 ## 2. 前提条件
 
-- **Python 3.10+** 和 [uv](https://docs.astral.sh/uv/) 包管理器
+- **Python 3.10+** 和 [uv](https://docs.astral.sh/uv/) 包管理器（仅源码 / 控制台入口方式需要；走 §3.2 的 npx 方式时不需要）
 - **mcp 可选依赖**：`mcp[cli]>=1.25.0,<2.0.0`（pyproject.toml 中的 `mcp` extra，安装方式见 §3.1）
+- **Node.js 18+**（仅 §3.2 的 npx 方式需要，此时无需 Python）
 - **配置文件**：项目根目录（源码模式）或工作目录 / exe 同级目录（EXE 模式）下存在 `jenkins-config.yaml` / `jenkins-config.yml` / `jenkins-config.json`（路径探测规则见 §7.1）
 - **Jenkins 服务器可达**：MCP Server 需要能够访问配置中的 Jenkins 实例
 
@@ -44,7 +45,49 @@ pip install "jenkins-config[mcp]"
 
 未安装 mcp 依赖时，`jenkins_config.mcp.server` 模块本身仍可被导入（依赖延迟到首次使用时才加载），但启动入口 `jenkins-config-mcp` 会输出友好提示并以退出码 1 退出：`缺少 mcp 依赖，请执行: pip install jenkins-config[mcp]`。
 
-### 3.2 通过控制台入口运行（推荐）
+### 3.2 通过 npx 一键运行（推荐给使用方，无需 Python）
+
+面向"只想在 MCP 客户端里填一行配置"的使用方。`npm/` 目录下的启动器包 `jenkins-config-mcp`
+首次运行时会从 GitHub Release 下载当前平台的预编译二进制（PyInstaller 打包，**自带 Python 运行时**），
+校验 sha256 后缓存复用，因此目标机器只需 Node.js 18+：
+
+```json
+{
+  "mcpServers": {
+    "jenkins-build": {
+      "command": "npx",
+      "args": ["-y", "jenkins-config-mcp"]
+    }
+  }
+}
+```
+
+支持平台：Windows x64、macOS x64 / arm64、Linux x64 / arm64。
+
+启动器按以下优先级解析运行方式，并以 stdio 直通拉起子进程（参数 / 环境变量 / 退出码 / 信号均透传）：
+
+1. `JENKINS_MCP_BINARY` — 直接指定二进制路径
+2. `JENKINS_MCP_PYTHON` — 指定解释器，执行 `-m jenkins_config.mcp.server`（开发用）
+3. 缓存中已下载的二进制（`~/.cache/jenkins-config-mcp/<tag>/`，Windows 为 `%LOCALAPPDATA%`）
+4. 从 Release 下载二进制并校验 sha256（清单为同一 Release 下的 `checksums.txt`）
+5. 兜底：PATH 上的 `jenkins-config-mcp` / `uvx` / `python`
+
+启动器自身的日志一律写 stderr，stdout 只承载 MCP 的 JSON-RPC 报文。排查启动问题时可先看解析结果：
+
+```bash
+JENKINS_MCP_LAUNCHER_DRYRUN=1 npx -y jenkins-config-mcp
+```
+
+可用环境变量：
+
+- `JENKINS_MCP_VERSION` — 要下载的 Release tag，默认 `v<npm 包版本>`
+- `JENKINS_MCP_RELEASE_BASE` — 下载地址前缀，默认 GitHub Release，可指向内网镜像
+- `JENKINS_MCP_CACHE_DIR` — 缓存根目录
+- `JENKINS_MCP_SKIP_CHECKSUM=1` — 跳过 sha256 校验（不建议）
+
+> 二进制由 `.github/workflows/build.yml` 在 tag 推送时构建并发布，npm 包版本需与 Release tag 对齐（`v<version>`）。
+
+### 3.3 通过控制台入口运行
 
 适用于已安装 `jenkins-config` 包的本地开发环境。将以下配置添加到 MCP 客户端的配置文件：
 
@@ -90,7 +133,7 @@ pip install "jenkins-config[mcp]"
 }
 ```
 
-### 3.3 本地开发模式
+### 3.4 本地开发模式
 
 适用于开发调试，直接运行 Python 模块（效果与 `jenkins-config-mcp` 入口一致）：
 

@@ -142,9 +142,17 @@ uv run pytest tests/test_mcp -v
 
 # Debug with MCP Inspector
 uv run mcp dev jenkins_config/mcp/server.py
+
+# Build the MCP Server binary (self-contained, no Python needed at runtime)
+uv run python build.py --target mcp     # or --target all for CLI + MCP
+
+# npx launcher self-check (prints the resolved command instead of starting)
+JENKINS_MCP_LAUNCHER_DRYRUN=1 node npm/bin/jenkins-config-mcp.js
 ```
 
-- Entry point: `jenkins-config-mcp = jenkins_config.mcp.server:main`
+- Entry point: `jenkins-config-mcp = jenkins_config.mcp.server:main`; PyInstaller entry is `entry_point_mcp.py`
+- npx distribution: `npm/` is a Node launcher package (`npx -y jenkins-config-mcp`) that downloads the platform binary from GitHub Release on first run (sha256-verified against `checksums.txt`, cached under `~/.cache/jenkins-config-mcp/<tag>/`), so consumers need only Node 18+. Resolution order: `JENKINS_MCP_BINARY` → `JENKINS_MCP_PYTHON` → cached binary → download → PATH `jenkins-config-mcp`/`uvx`/`python`. All launcher logs go to stderr; stdout is the JSON-RPC channel
+- Release assets are built by `.github/workflows/build.yml` on `v*` tags: `jenkins-config-mcp-{win-x64.exe,macos-x64,macos-arm64,linux-x64,linux-arm64}` + `checksums.txt`. Keep the npm package version in sync with the tag
 - Write operations (`trigger_build` / `rebuild_last` / `save_config`) require `JENKINS_MCP_ALLOW_WRITE=1`; direct-mode `jenkins_url` is restricted by `JENKINS_MCP_ALLOWED_HOSTS` (authoritative once set)
 - Caller-supplied `config_path` must resolve inside `paths.search_bases()`; extend the allowlist with `JENKINS_MCP_CONFIG_ROOTS` (os.pathsep-separated)
 - Full documentation: `docs/mcp/README.md` (11 tools, 4 resources, 2 prompts, config path resolution, write gate + host allowlist)
