@@ -9,6 +9,8 @@
 - **交互式选择** - 终端界面选择要构建的环境和项目
 - **构建历史** - 自动记录构建结果，支持查看统计
 - **独立 EXE** - 可打包成单个可执行文件，无需安装 Python
+- **MCP Server** - 向 AI Agent 暴露构建能力，支持 `npx` 一键接入（无需 Python）
+
 
 ## 快速开始
 
@@ -140,18 +142,26 @@ uv run python build.py --icon assets/my-icon.ico
 
 # 清理后重新打包
 uv run python build.py --clean
+
+# 打包 MCP Server 二进制（供 npx 启动器下载使用）
+uv run python build.py --target mcp
+
+# 同时打包 CLI 与 MCP Server
+uv run python build.py --target all
 ```
 
 ### 打包输出
 
 ```
 dist/
-└── jenkins-build.exe  # 单文件模式
-# 或
+├── jenkins-build.exe       # CLI（单文件模式）
+└── jenkins-config-mcp.exe  # MCP Server（--target mcp/all 时产出）
+# 或目录模式
 dist/
-└── jenkins-build/     # 目录模式
+└── jenkins-build/
     └── jenkins-build.exe
 ```
+
 
 ### EXE 使用说明
 
@@ -170,12 +180,35 @@ jenkins-build.exe -c /path/to/config.yaml --list-envs
 
 本项目提供 MCP（Model Context Protocol）Server，将构建能力暴露给 AI Agent（Claude Desktop、Cursor 等）。共 11 个工具（环境/项目/配置查询、构建触发、状态与日志查询、历史统计、重建上次构建等）、4 个只读 Resources、2 个 Prompts。
 
+### 方式一：npx 一键安装（推荐，无需 Python）
+
+在 MCP 客户端配置里填一行即可。启动器首次运行会从 GitHub Release 下载当前平台的预编译二进制（自带 Python 运行时），校验 sha256 后缓存复用，因此目标机器只需 Node.js 18+：
+
+```json
+{
+  "mcpServers": {
+    "jenkins-build": {
+      "command": "npx",
+      "args": ["-y", "jenkins-config-mcp"]
+    }
+  }
+}
+```
+
+支持平台：Windows x64、macOS x64 / arm64、Linux x64 / arm64。默认只读，需要让 AI 代为触发构建时再加 `"env": { "JENKINS_MCP_ALLOW_WRITE": "1" }`。
+
+排查启动问题（只打印解析出的命令，不真正启动）：
+
+```bash
+JENKINS_MCP_LAUNCHER_DRYRUN=1 npx -y jenkins-config-mcp
+```
+
+### 方式二：源码 / 已安装包（需要 Python）
+
 ```bash
 # 安装 MCP 可选依赖
 uv sync --extra mcp
 ```
-
-MCP 客户端最小配置示例：
 
 ```json
 {
@@ -188,7 +221,8 @@ MCP 客户端最小配置示例：
 }
 ```
 
-完整文档（工具参数、配置路径解析规则、并发注意事项、调试与测试）见 [docs/mcp/README.md](docs/mcp/README.md)。
+完整文档（工具参数、配置路径解析规则、启动器环境变量、并发注意事项、调试与测试）见 [docs/mcp/README.md](docs/mcp/README.md)。
+
 
 ## 项目结构
 
@@ -201,7 +235,12 @@ jenkins-config/
 ├── jenkins-config.example.yaml # 配置示例（YAML，推荐）
 ├── jenkins-config.example.json # 配置示例（JSON，兼容）
 ├── build.py                    # PyInstaller 打包脚本
-├── entry_point.py              # EXE 入口点
+├── entry_point.py              # CLI EXE 入口点
+├── entry_point_mcp.py          # MCP Server EXE 入口点
+├── npm/                        # npx 启动器包（下载并拉起 MCP 二进制）
+│   ├── package.json
+│   └── bin/jenkins-config-mcp.js
+
 ├── jenkins_config/             # Python 包
 │   ├── __init__.py
 │   ├── cli.py                  # CLI 入口
