@@ -40,7 +40,8 @@ jobs:
           - os: ubuntu-24.04-arm
             suffix: linux-arm64
             targets: mcp
-          - os: macos-13
+          # macos-13 已于 2025-12 下线，Intel 版改用 macos-15-intel（x86_64 最后一版镜像）
+          - os: macos-15-intel
             suffix: macos-x64
             targets: mcp
           - os: macos-latest
