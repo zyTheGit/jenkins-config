@@ -115,3 +115,6 @@ jobs:
         with:
           files: release-assets/*
           generate_release_notes: true
+          # 带连字符的 tag（v1.0.0-rc.1 等）视为预发布
+          prerelease: ${{ contains(github.ref_name, '-') }}
+
