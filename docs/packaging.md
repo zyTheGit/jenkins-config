@@ -64,4 +64,17 @@ jenkins-build.exe -c /path/to/config.yaml --list-envs
 - `jenkins-build-{win.exe,macos,linux}` — CLI
 - `checksums.txt` — 上述全部资产的 sha256，npx 启动器据此校验
 
-带连字符的 tag（如 `v1.6.0-rc.1`）会发布为 pre-release。npm 包版本需与 tag 保持一致，否则 `npx` 默认会去下载不存在的 Release。
+带连字符的 tag（如 `v1.6.0-rc.1`）会发布为 pre-release。
+
+## npm 自动发布
+
+`release` job 完成后，`publish-npm` job 会自动把 `npm/` 发到 npmjs.com：
+
+- 版本号从 tag 推导（`v1.6.0` → `1.6.0`），`npm/package.json` 不需要手工改，也不会再和 Release 资产版本漂移
+- 预发布 tag 发到 `next` 频道，不抢占 `latest`；正式 tag 发到 `latest`
+- 带 `--provenance`，在 npm 页面上可追溯到具体的 workflow run
+
+前置条件：仓库 Settings → Secrets and variables → Actions 里添加 `NPM_TOKEN`，类型选 npm 的 **Automation** token（开了 2FA 的账号用普通 token 会被拒）。缺少该 secret 时 `publish-npm` 会直接报错退出，不影响已经发好的 GitHub Release。
+
+发布顺序是有意为之：先传 Release 资产，再发 npm。反过来的话用户装到包却下不到二进制。
+
