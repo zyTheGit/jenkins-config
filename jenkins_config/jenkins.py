@@ -21,8 +21,12 @@ from __future__ import annotations
 import time
 from enum import Enum
 from dataclasses import dataclass
+from types import TracebackType
+from typing import Any
 from urllib.parse import quote
+
 import requests
+
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -85,8 +89,36 @@ class BuildInfo:
 
 
 # ============================================================================
+# 日志脱敏
+# ============================================================================
+
+# 调试日志中需要脱敏的响应头（Set-Cookie 里的 JSESSIONID 等同于可复用的会话凭据）
+SENSITIVE_HEADERS = frozenset({"set-cookie", "authorization", "www-authenticate"})
+
+
+def _redact_headers(headers: Any) -> dict[str, str]:
+    """脱敏 HTTP 响应头，供调试日志使用
+
+    Args:
+        headers: 响应头映射（requests 的 CaseInsensitiveDict 或普通 dict）
+
+    Returns:
+        敏感字段值替换为 "***" 的普通字典
+
+    Example:
+        >>> _redact_headers({"Set-Cookie": "JSESSIONID=abc", "Location": "/q/1"})
+        {'Set-Cookie': '***', 'Location': '/q/1'}
+    """
+    return {
+        key: ("***" if key.lower() in SENSITIVE_HEADERS else value)
+        for key, value in dict(headers).items()
+    }
+
+
+# ============================================================================
 # Jenkins 客户端类
 # ============================================================================
+
 
 
 class JenkinsClient:
@@ -152,8 +184,64 @@ class JenkinsClient:
         self._crumb_time: float = 0
 
     # ========================================================================
+    # 资源管理：显式关闭底层 Session
+    # ========================================================================
+
+    def close(self) -> None:
+        """
+        关闭底层 requests.Session，释放连接池
+
+        长驻进程（如 MCP Server）中每次调用都新建客户端时，
+        必须显式关闭，否则连接释放只能依赖 GC。
+
+        Example:
+            >>> client = JenkinsClient("http://jenkins", "token")
+            >>> client.close()
+        """
+        try:
+            self.session.close()
+        except Exception:
+            # 关闭失败不应影响主流程
+            pass
+
+    def __enter__(self) -> JenkinsClient:
+        """
+        进入上下文，返回自身
+
+        Returns:
+            当前 JenkinsClient 实例
+
+        Example:
+            >>> with JenkinsClient("http://jenkins", "token") as client:
+            ...     client.health_check()  # doctest: +SKIP
+        """
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool:
+
+        """
+        退出上下文时关闭 Session
+
+        Args:
+            exc_type: 异常类型
+            exc_value: 异常实例
+            traceback: 异常回溯
+
+        Returns:
+            始终为 False，不吞掉上下文中的异常
+        """
+        self.close()
+        return False
+
+    # ========================================================================
     # 公共方法：查询 Git Parameter 参数名
     # ========================================================================
+
 
     def get_git_parameter_names(self, job_path: str) -> set[str]:
         """
@@ -325,7 +413,9 @@ class JenkinsClient:
         crumb = self._get_crumb()
         if crumb:
             headers[crumb[0]] = crumb[1]
-            log_debug(f"CSRF Token: {crumb[0]}={crumb[1]}")
+            # 只记录 crumb 字段名，值本身是可复用的 CSRF 凭据，不入日志
+            log_debug(f"CSRF Token: {crumb[0]}=***")
+
 
         try:
             # 发送 POST 请求
@@ -340,7 +430,8 @@ class JenkinsClient:
             )
 
             log_debug(f"响应状态码: {resp.status_code}")
-            log_debug(f"响应头: {dict(resp.headers)}")
+            log_debug(f"响应头: {_redact_headers(resp.headers)}")
+
 
             # 201 Created 表示构建请求成功入队
             if resp.status_code == 201:
@@ -426,21 +517,29 @@ class JenkinsClient:
         Note:
             - 队列项包含 executable 字段时，表示已分配构建编号
             - cancelled 字段为 true 时，表示构建被取消
+            - 单次请求超时与轮询间隔都收敛到剩余预算之内，
+              使 timeout 成为整体墙钟上限（调用方据此保证快速返回）
 
         Example:
             >>> build_num = client.get_build_number("http://jenkins/queue/item/456/")
             >>> print(build_num)
             789
         """
-        # 基于 elapsed 时间轮询，每次间隔 3 秒
-        start = time.time()
+        # 基于 elapsed 时间轮询，每次间隔最多 3 秒
+        deadline = time.monotonic() + timeout
         poll_count = 0
-        while time.time() - start < timeout:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
             poll_count += 1
             try:
                 api_url = f"{queue_url.rstrip('/')}/api/json"
                 log_debug(f"查询队列: {api_url} (第 {poll_count} 次)")
-                resp = self.session.get(api_url, timeout=self.timeout)
+                # 单次请求不得超出剩余预算，否则底层超时与重试会把总耗时放大
+                resp = self.session.get(
+                    api_url, timeout=min(self.timeout, remaining)
+                )
                 if resp.ok:
                     data = resp.json()
                     log_debug(f"队列响应: {data}")
@@ -456,10 +555,15 @@ class JenkinsClient:
                 log_debug(f"查询队列异常（重试耗尽）: {e}")
             except Exception as e:
                 log_debug(f"查询队列异常: {e}")
-            time.sleep(3)
+            # 轮询间隔同样受剩余预算约束，避免在超时后仍多睡 3 秒
+            sleep_for = min(3.0, deadline - time.monotonic())
+            if sleep_for <= 0:
+                break
+            time.sleep(sleep_for)
 
         log_debug("获取构建编号超时")
         return None
+
 
     # ========================================================================
     # 公共方法：查询构建状态
@@ -537,7 +641,9 @@ class JenkinsClient:
     # 公共方法：获取构建日志
     # ========================================================================
 
-    def get_build_log(self, job_path: str, build_num: int) -> str:
+    def get_build_log(
+        self, job_path: str, build_num: int, max_bytes: int | None = None
+    ) -> str:
         """
         获取构建日志
 
@@ -546,9 +652,11 @@ class JenkinsClient:
         Args:
             job_path: Jenkins Job 路径
             build_num: 构建编号
+            max_bytes: 最多保留的字节数，None 表示不限制；
+                指定时以流式方式读取并只保留日志尾部，避免超大日志占满内存
 
         Returns:
-            日志文本，失败时返回空字符串
+            日志文本，失败时返回空字符串；被截断时开头带一行截断说明
 
         Note:
             - consoleText 返回纯文本格式
@@ -558,6 +666,7 @@ class JenkinsClient:
             >>> log = client.get_build_log("my-project", 123)
             >>> print(log[:100])  # 打印前 100 个字符
             Started by user admin...
+            >>> tail = client.get_build_log("my-project", 123, max_bytes=50 * 1024)
         """
         encoded_path = quote(job_path, safe="-_.~")
         url = f"{self.base_url}/job/{encoded_path}/{build_num}/consoleText"
@@ -565,13 +674,16 @@ class JenkinsClient:
         log_debug(f"获取构建日志: {url}")
 
         try:
-            resp = self.session.get(url, timeout=self.timeout)
-            if resp.ok:
-                log_content = resp.text
-                log_debug(f"日志长度: {len(log_content)} 字符")
-                return log_content
-            else:
+            if max_bytes is None or max_bytes <= 0:
+                resp = self.session.get(url, timeout=self.timeout)
+                if resp.ok:
+                    log_content = resp.text
+                    log_debug(f"日志长度: {len(log_content)} 字符")
+                    return log_content
                 log_debug(f"获取日志失败: HTTP {resp.status_code}")
+                return ""
+
+            return self._get_build_log_tail(url, max_bytes)
         except requests.exceptions.RetryError as e:
             log_debug(f"获取日志异常（重试耗尽）: {e}")
         except Exception as e:
@@ -579,7 +691,64 @@ class JenkinsClient:
 
         return ""
 
+    def _get_build_log_tail(self, url: str, max_bytes: int) -> str:
+        """
+        只取日志尾部 max_bytes 字节
+
+        Args:
+            url: consoleText 接口地址
+            max_bytes: 保留的最大字节数
+
+        Returns:
+            日志尾部文本；发生截断时开头附加一行说明，请求失败返回空字符串
+
+        Note:
+            - 优先用 HTTP 尾部 Range（``bytes=-N``）请求，服务端支持时只传输尾部，
+              不必把几百 MB 的完整日志拉过网络；且不增加额外往返
+            - 服务端忽略 Range（返回 200）时退回流式读取 + 滚动丢弃，
+              内存占用仍恒定在 max_bytes + 单块大小以内
+        """
+        headers = {"Range": f"bytes=-{max_bytes}"}
+        with self.session.get(
+            url, timeout=self.timeout, stream=True, headers=headers
+        ) as resp:
+            if not resp.ok:
+                log_debug(f"获取日志失败: HTTP {resp.status_code}")
+                return ""
+
+            partial = resp.status_code == 206
+            buffer = bytearray()
+            total = 0
+            for chunk in resp.iter_content(chunk_size=64 * 1024):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                buffer.extend(chunk)
+                if len(buffer) > max_bytes:
+                    # 只保留尾部，内存占用恒定在 max_bytes + 单块大小以内
+                    del buffer[: len(buffer) - max_bytes]
+
+            if partial:
+                # 206 时只收到尾部，原始长度需从 Content-Range 头解析
+                total = _parse_content_range_total(
+                    resp.headers.get("Content-Range", "")
+                ) or total
+
+        text = buffer.decode("utf-8", errors="replace")
+        log_debug(
+            f"日志长度: {total} 字节（保留尾部 {len(buffer)} 字节，"
+            f"{'Range 命中' if partial else '流式截断'}）"
+        )
+        if total > len(buffer):
+            return (
+                f"...（日志已截断，原始长度 {total} 字节，"
+                f"仅保留尾部 {len(buffer)} 字节）\n{text}"
+            )
+        return text
+
+
     # ========================================================================
+
     # 公共方法：Jenkins 连接预检
     # ========================================================================
 
@@ -614,3 +783,23 @@ class JenkinsClient:
             raise ConnectionError(
                 f"连接 Jenkins 服务器超时: {self.base_url}"
             ) from e
+
+
+def _parse_content_range_total(value: str) -> int:
+    """
+    从 Content-Range 头解析资源总长度
+
+    Args:
+        value: 形如 ``bytes 900-999/1000`` 的头部值
+
+    Returns:
+        总字节数；无法解析时返回 0
+
+    Example:
+        >>> _parse_content_range_total("bytes 900-999/1000")
+        1000
+        >>> _parse_content_range_total("bytes 0-1/*")
+        0
+    """
+    total = value.rsplit("/", 1)[-1].strip()
+    return int(total) if total.isdigit() else 0

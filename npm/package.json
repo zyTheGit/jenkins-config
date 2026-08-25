@@ -1,0 +1,26 @@
+{
+  "name": "jenkins-config-mcp",
+  "version": "1.6.0",
+  "description": "npx launcher for the jenkins-config MCP Server (Python)",
+  "bin": {
+    "jenkins-config-mcp": "bin/jenkins-config-mcp.js"
+  },
+  "files": [
+    "bin/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "mcp",
+    "jenkins",
+    "modelcontextprotocol"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zyTheGit/jenkins-config.git",
+    "directory": "npm"
+  },
+  "license": "MIT"
+}

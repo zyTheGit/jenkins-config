@@ -52,11 +52,14 @@ jenkins-config/
 │   ├── __init__.py
 │   ├── cli.py                  # CLI entry point
 │   ├── config.py               # Config loading/parsing
+│   ├── paths.py                # Config/history path anchoring (shared by CLI + MCP)
+│   ├── filelock.py             # Cross-process file lock + atomic write
 │   ├── jenkins.py              # Jenkins API client
 │   ├── builder.py              # Build orchestration
 │   ├── history.py              # Build history persistence
 │   └── utils.py                # Logging utilities
 ├── tests/                      # Test suite
+│   ├── test_mcp/               # MCP tests (auto-skipped when mcp extra missing)
 │   ├── test_config.py
 │   ├── test_jenkins.py
 │   ├── test_builder.py
@@ -66,6 +69,21 @@ jenkins-config/
 │   └── build_history.json      # Build history (generated)
 └── dist/                       # Built executables (generated)
     └── jenkins-build.exe
+```
+
+MCP Server package layout (under `jenkins_config/`):
+
+```
+jenkins_config/mcp/             # MCP Server (optional, requires "mcp" extra)
+├── server.py                   # Entry point (lazy FastMCP instance, stdio transport)
+├── utils.py                    # Shared helpers (config path resolution, clients)
+├── resources.py                # MCP Resources (read-only data endpoints)
+├── prompts.py                  # MCP Prompts (workflow templates)
+└── tools/                      # MCP Tools (11 tools)
+    ├── config_tools.py         # list_environments, list_projects, show_config, save_config
+    ├── build_tools.py          # trigger_build, rebuild_last
+    ├── history_tools.py        # show_history, show_history_stats
+    └── diagnose_tools.py       # health_check, get_build_status, get_build_log
 ```
 
 ## Architecture
@@ -106,6 +124,38 @@ jenkins-build --history-stats
 # Use custom config file
 jenkins-build -c /path/to/config.json --list-envs
 ```
+
+## MCP Server
+
+```bash
+# Install MCP optional dependency (extra "mcp": mcp[cli]>=1.25.0,<2.0.0)
+uv sync --extra mcp
+
+# Run the MCP Server (stdio transport; console entry defined in pyproject.toml)
+jenkins-config-mcp
+
+# Or run the module directly (local development)
+uv run python -m jenkins_config.mcp.server
+
+# Run MCP tests (auto-skipped via pytest.importorskip when mcp is not installed)
+uv run pytest tests/test_mcp -v
+
+# Debug with MCP Inspector
+uv run mcp dev jenkins_config/mcp/server.py
+
+# Build the MCP Server binary (self-contained, no Python needed at runtime)
+uv run python build.py --target mcp     # or --target all for CLI + MCP
+
+# npx launcher self-check (prints the resolved command instead of starting)
+JENKINS_MCP_LAUNCHER_DRYRUN=1 node npm/bin/jenkins-config-mcp.js
+```
+
+- Entry point: `jenkins-config-mcp = jenkins_config.mcp.server:main`; PyInstaller entry is `entry_point_mcp.py`
+- npx distribution: `npm/` is a Node launcher package (`npx -y jenkins-config-mcp`) that downloads the platform binary from GitHub Release on first run (sha256-verified against `checksums.txt`, cached under `~/.cache/jenkins-config-mcp/<tag>/`), so consumers need only Node 18+. Resolution order: `JENKINS_MCP_BINARY` → `JENKINS_MCP_PYTHON` → cached binary → download → PATH `jenkins-config-mcp`/`uvx`/`python`. All launcher logs go to stderr; stdout is the JSON-RPC channel
+- Release assets are built by `.github/workflows/build.yml` on `v*` tags: `jenkins-config-mcp-{win-x64.exe,macos-x64,macos-arm64,linux-x64,linux-arm64}` + `checksums.txt`. Keep the npm package version in sync with the tag
+- Write operations (`trigger_build` / `rebuild_last` / `save_config`) require `JENKINS_MCP_ALLOW_WRITE=1`; direct-mode `jenkins_url` is restricted by `JENKINS_MCP_ALLOWED_HOSTS` (authoritative once set)
+- Caller-supplied `config_path` must resolve inside `paths.search_bases()`; extend the allowlist with `JENKINS_MCP_CONFIG_ROOTS` (os.pathsep-separated)
+- Full documentation: `docs/mcp/README.md` (11 tools, 4 resources, 2 prompts, config path resolution, write gate + host allowlist)
 
 ## Code Style
 

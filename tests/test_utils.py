@@ -67,3 +67,30 @@ def test_is_debug_mode_default():
     """默认调试模式关闭"""
     set_debug_mode(False)
     assert is_debug_mode() is False
+
+
+# ============================================================================
+# format_duration_short（英文缩写风格）
+# ============================================================================
+
+
+def test_format_duration_short_seconds():
+    """不足 1 分钟时只输出秒"""
+    from jenkins_config.utils import format_duration_short
+    assert format_duration_short(0) == "0s"
+    assert format_duration_short(45) == "45s"
+
+
+def test_format_duration_short_minutes():
+    """满 1 分钟不足 1 小时时输出分秒"""
+    from jenkins_config.utils import format_duration_short
+    assert format_duration_short(60) == "1m 0s"
+    assert format_duration_short(125) == "2m 5s"
+
+
+def test_format_duration_short_hours():
+    """满 1 小时时进位输出时分秒"""
+    from jenkins_config.utils import format_duration_short
+    assert format_duration_short(3600) == "1h 0m 0s"
+    assert format_duration_short(3725) == "1h 2m 5s"
+

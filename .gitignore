@@ -14,6 +14,9 @@
 *.spec
 *.swo
 *.swp
+*.tmp
+*.yaml.lock
+*.yml.lock
 .claude
 .codegraph
 .coverage
@@ -27,6 +30,9 @@
 __pycache__/
 build/
 data/*.json
+data/*.json.corrupt
+data/*.json.lock
+data/*.json.*.tmp
 develop-eggs/
 dist/
 downloads/
@@ -36,6 +42,8 @@ htmlcov/
 jenkins_logs/
 jenkins-config.json
 jenkins-config.yaml
+jenkins-config.yaml.bak
+jenkins-config.yml.bak
 lib/
 lib64/
 parts/

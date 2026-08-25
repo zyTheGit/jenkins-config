@@ -36,6 +36,8 @@ def test_run_build_success(tmp_path, capsys):
     ):
         mock_config = MagicMock()
         mock_config.branch_field = "branch"
+        mock_config.branch_field_for.return_value = "branch"
+
         mock_config.build.log_dir = str(tmp_path)
         mock_config.build.log_retention_days = 3
         mock_config.server = MagicMock(url="http://jenkins:8080",
@@ -115,6 +117,8 @@ def test_run_build_with_branch_override(tmp_path):
     ):
         mock_config = MagicMock()
         mock_config.branch_field = "branch"
+        mock_config.branch_field_for.return_value = "branch"
+
         mock_config.build.log_dir = str(tmp_path)
         mock_config.build.log_retention_days = 3
         mock_config.server = MagicMock()
@@ -161,6 +165,8 @@ def test_run_build_with_params_override(tmp_path):
     ):
         mock_config = MagicMock()
         mock_config.branch_field = "branch"
+        mock_config.branch_field_for.return_value = "branch"
+
         mock_config.build.log_dir = str(tmp_path)
         mock_config.build.log_retention_days = 3
         mock_config.server = MagicMock()
@@ -206,6 +212,8 @@ def test_run_build_user_cancels(tmp_path):
     ):
         mock_config = MagicMock()
         mock_config.branch_field = "branch"
+        mock_config.branch_field_for.return_value = "branch"
+
         mock_config.build = MagicMock()
         mock_config.server = MagicMock()
         mock_load.return_value = mock_config
@@ -234,6 +242,8 @@ def test_run_build_keyboard_interrupt(tmp_path):
     ):
         mock_config = MagicMock()
         mock_config.branch_field = "branch"
+        mock_config.branch_field_for.return_value = "branch"
+
         mock_config.build = MagicMock()
         mock_config.server = MagicMock()
         mock_load.return_value = mock_config
@@ -265,6 +275,8 @@ def test_run_build_yes_skip_confirm(tmp_path):
     ):
         mock_config = MagicMock()
         mock_config.branch_field = "branch"
+        mock_config.branch_field_for.return_value = "branch"
+
         mock_config.build.log_dir = str(tmp_path)
         mock_config.build.log_retention_days = 3
         mock_config.server = MagicMock()
@@ -272,9 +284,11 @@ def test_run_build_yes_skip_confirm(tmp_path):
 
         job = MagicMock()
         job.key = "dev_app"
+
         job.env = "dev"
-        job.params = {}
+        job.params = {"branch": "develop"}
         mock_config.get_jobs.return_value = [job]
+
 
         mock_builder = MagicMock()
         mock_builder_cls.return_value = mock_builder

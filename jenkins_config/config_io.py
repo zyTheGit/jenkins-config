@@ -19,6 +19,8 @@ from .config_types import (
     Project,
     ServerConfig,
 )
+from .filelock import atomic_write, file_lock
+
 
 logger = logging.getLogger(__name__)
 
@@ -238,11 +240,26 @@ def _parse_params_field(params_value: object) -> dict[str, Any]:
 
 
 def save_config(config: Config, path: str):
-    """将配置写入 YAML 文件"""
+    """
+    将配置写入 YAML 文件
+
+    Args:
+        config: 待保存的 Config 对象
+        path: 目标文件路径
+
+    Note:
+        全程持有与目标文件同名的进程间锁，并通过 atomic_write 原子替换，
+        避免 CLI 与 MCP Server 同时保存配置时互相覆盖或写出被截断的文件
+
+    Example:
+        >>> save_config(config, "jenkins-config.yaml")  # doctest: +SKIP
+    """
     import yaml
 
     data = config_to_dict(config)
-    with open(path, "w", encoding="utf-8") as f:
+    target = Path(path)
+
+    def _write(f) -> None:
         f.write(
             "# Jenkins 构建工具配置文件\n"
             "# 推荐使用 YAML 格式（支持注释）\n"
@@ -262,8 +279,13 @@ def save_config(config: Config, path: str):
             width=80,
         )
 
+    with file_lock(target, required=True):
+        atomic_write(target, _write)
+
+
 
 def config_to_dict(config: Config) -> dict[str, Any]:
+
     """将 Config 对象序列化为字典"""
     environments = {}
     for env_name, env in config.environments.items():

@@ -220,3 +220,33 @@ def format_duration(seconds: int) -> str:
     # 例如：divmod(65, 60) = (1, 5)，表示 1 分 5 秒
     mins, secs = divmod(seconds, 60)
     return f"{mins}分{secs}秒"
+
+
+def format_duration_short(seconds: int) -> str:
+    """
+    格式化时长（英文缩写风格，支持小时进位）
+
+    与 format_duration 的中文风格互补，用于 MCP 等对外接口的返回值。
+
+    Args:
+        seconds: 秒数
+
+    Returns:
+        格式化后的时间字符串，超过 1 小时带 h 段，超过 1 分钟带 m 段
+
+    Example:
+        >>> format_duration_short(45)
+        '45s'
+        >>> format_duration_short(125)
+        '2m 5s'
+        >>> format_duration_short(3725)
+        '1h 2m 5s'
+    """
+    if seconds >= 3600:
+        hours, remainder = divmod(seconds, 3600)
+        mins, secs = divmod(remainder, 60)
+        return f"{hours}h {mins}m {secs}s"
+    if seconds >= 60:
+        mins, secs = divmod(seconds, 60)
+        return f"{mins}m {secs}s"
+    return f"{seconds}s"

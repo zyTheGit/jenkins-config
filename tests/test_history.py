@@ -263,3 +263,166 @@ def test_add_batch_empty_list(tmp_path):
     records = manager.list()
     assert len(records) == 1
     assert records[0].job_key == "existing"
+
+
+# ============================================================================
+# 文件安全：create 开关 / 原子写入 / 损坏备份
+# ============================================================================
+
+
+def _record(job_key="dev_test", status="SUCCESS"):
+    return BuildRecord(
+        timestamp="2026-03-20T10:00:00", env="dev", job_key=job_key,
+        build_num=1, status=status, duration=60, log_file="",
+    )
+
+
+def test_create_false_does_not_touch_filesystem(tmp_path):
+    """create=False 时只读查询不创建文件与父目录"""
+    history_file = tmp_path / "sub" / "history.json"
+    manager = HistoryManager(str(history_file), create=False)
+
+    assert manager.list() == []
+    assert manager.stats()["total"] == 0
+    assert not history_file.exists()
+    assert not history_file.parent.exists()
+
+
+def test_corrupt_file_backed_up_on_write(tmp_path):
+    """写入时发现损坏的 JSON：另存为 .corrupt，新记录正常落盘"""
+    history_file = tmp_path / "history.json"
+    history_file.write_text("{not json", encoding="utf-8")
+
+    manager = HistoryManager(str(history_file))
+    manager.add(_record("dev_new"))
+
+    backup = tmp_path / "history.json.corrupt"
+    assert backup.exists()
+    assert backup.read_text(encoding="utf-8") == "{not json"
+    assert [r.job_key for r in manager.list()] == ["dev_new"]
+
+
+def test_corrupt_file_not_touched_by_readonly_query(tmp_path):
+    """只读查询遇到损坏文件只告警，不搬走文件（无副作用）"""
+    history_file = tmp_path / "history.json"
+    history_file.write_text("{not json", encoding="utf-8")
+
+    manager = HistoryManager(str(history_file), create=False)
+    assert manager.list() == []
+
+    assert history_file.exists()
+    assert not (tmp_path / "history.json.corrupt").exists()
+
+
+def test_non_object_json_treated_as_corrupt(tmp_path):
+    """合法 JSON 但顶层不是对象时按损坏处理，不抛 AttributeError"""
+    history_file = tmp_path / "history.json"
+    history_file.write_text("[1, 2, 3]", encoding="utf-8")
+
+    manager = HistoryManager(str(history_file), create=False)
+    assert manager.list() == []
+    assert manager.stats()["total"] == 0
+
+
+def test_records_field_not_list_treated_as_corrupt(tmp_path):
+    """records 字段不是数组时同样按损坏处理"""
+    history_file = tmp_path / "history.json"
+    history_file.write_text('{"records": {"a": 1}}', encoding="utf-8")
+
+    manager = HistoryManager(str(history_file), create=False)
+    assert manager.list() == []
+
+
+def test_write_is_atomic_no_tmp_left(tmp_path):
+    """写入后不残留临时文件，且内容是完整可解析的 JSON"""
+    history_file = tmp_path / "history.json"
+    manager = HistoryManager(str(history_file))
+    manager.add(_record())
+
+    assert not (tmp_path / "history.json.tmp").exists()
+    data = json.loads(history_file.read_text(encoding="utf-8"))
+    assert len(data["records"]) == 1
+
+
+def test_lock_file_released_after_write(tmp_path):
+    """写入结束后锁已释放，同进程再次写入不会阻塞"""
+    history_file = tmp_path / "history.json"
+    manager = HistoryManager(str(history_file))
+
+    manager.add(_record("dev_a"))
+    manager.add(_record("dev_b"))
+
+    assert {r.job_key for r in manager.list()} == {"dev_a", "dev_b"}
+
+
+def test_stats_excludes_building_from_success_rate(tmp_path):
+    """BUILDING 占位记录单独统计，不参与成功率分母"""
+    history_file = tmp_path / "history.json"
+    manager = HistoryManager(str(history_file))
+
+    manager.add_batch([
+        _record("dev_ok", "SUCCESS"),
+        _record("dev_bad", "FAILURE"),
+        _record("dev_wip", "BUILDING"),
+    ])
+
+    stats = manager.stats()
+    assert stats["total"] == 3
+    assert stats["building"] == 1
+    # 分母为 2（剔除 BUILDING），成功 1 条
+    assert stats["success_rate"] == 50.0
+
+
+def test_stats_all_building_success_rate_zero(tmp_path):
+    """全部为 BUILDING 时成功率为 0，不触发除零"""
+    history_file = tmp_path / "history.json"
+    manager = HistoryManager(str(history_file))
+    manager.add(_record("dev_wip", "BUILDING"))
+
+    stats = manager.stats()
+    assert stats["building"] == 1
+    assert stats["success_rate"] == 0
+
+
+def test_stats_excludes_aborted_from_success_rate(tmp_path):
+    """ABORTED / CANCELLED 计入 other，不参与成功率分母"""
+    history_file = tmp_path / "history.json"
+    manager = HistoryManager(str(history_file))
+
+    manager.add_batch([
+        _record("dev_ok", "SUCCESS"),
+        _record("dev_bad", "FAILURE"),
+        _record("dev_abort", "ABORTED"),
+        _record("dev_cancel", "CANCELLED"),
+    ])
+
+    stats = manager.stats()
+    assert stats["total"] == 4
+    assert stats["other"] == 2
+    # 分母仅为 success + failure = 2
+    assert stats["success_rate"] == 50.0
+
+
+def test_write_path_raises_when_lock_unavailable(tmp_path):
+    """写路径拿不到文件锁时抛 TimeoutError，不在无锁状态下继续读-改-写"""
+    from unittest.mock import patch
+
+    history_file = tmp_path / "history.json"
+    manager = HistoryManager(str(history_file))
+
+    with patch("jenkins_config.filelock._acquire", return_value=False):
+        with pytest.raises(TimeoutError, match="等待文件锁"):
+            manager.add(_record("dev_x", "SUCCESS"))
+
+
+def test_read_path_degrades_when_lock_unavailable(tmp_path):
+    """只读路径拿不到锁时降级放行，不影响查询"""
+    from unittest.mock import patch
+
+    history_file = tmp_path / "history.json"
+    manager = HistoryManager(str(history_file))
+    manager.add(_record("dev_x", "SUCCESS"))
+
+    with patch("jenkins_config.filelock._acquire", return_value=False):
+        assert len(manager.list()) == 1
+

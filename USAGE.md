@@ -174,3 +174,15 @@ cd jenkins-config
 # 4. 查看帮助
 ./jenkins-auto-build.sh --help
 ```
+
+## 🤖 MCP Server（AI Agent 集成）
+
+构建能力也可通过 MCP Server 提供给 AI Agent（Claude Desktop、Cursor 等）调用，包含 11 个工具（环境/项目/配置查询、构建触发、状态与日志查询、历史统计、重建上次构建）。
+
+```bash
+# 安装 MCP 可选依赖并启动（stdio 传输）
+uv sync --extra mcp
+jenkins-config-mcp
+```
+
+详细用法（客户端配置、工具参数、配置路径解析规则、并发注意事项）见 [docs/mcp/README.md](docs/mcp/README.md)。

@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.3.0 (2026-08-25)
+
+### ✨ 新特性
+
+- **MCP Server 支持**（`mcp` extra）— 11 工具 / 4 Resources / 2 Prompts，新增 `jenkins-config-mcp` 入口，AI Agent 可通过标准 MCP 协议调用构建功能。
+- **跨进程文件锁模块** `filelock.py` — Windows/POSIX 双平台，原子写入 + 损坏备份。
+- **路径锚定模块** `paths.py` — 统一 CLI 与 MCP 的配置/历史路径解析。
+- `JenkinsClient` 上下文管理器协议（`with` 语句支持）
+- `get_build_log` 支持 `max_bytes` 尾部截断
+- 历史 `BuildRecord` 新增 `job_path` 字段
+- 环境级 `branch_field` 统一入口（`Config.branch_field_for`）
+
+### 🔧 变更
+
+- `stats()` 成功率分母由 `total` 改为 `success + failure`，新增 `building`/`other` 分桶
+- 历史文件损坏时自动备份为 `.corrupt`
+- `--history` 新增 BUILDING 状态图标显示
+
+### 🐛 修复
+
+- `project_name_from_job_key` 前缀匹配逻辑（避免全局替换误伤）
+
+---
+
 ## v1.2.0 (2026-06-10)
 
 ### ✨ 新特性

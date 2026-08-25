@@ -29,10 +29,11 @@ def test_resolve_absolute_path(tmp_path):
 
 def test_resolve_specified_relative_source(tmp_path):
     """指定相对路径解析到项目根目录"""
-    fake_cli = str(tmp_path / "jenkins_config" / "cli.py")
+    fake_paths = str(tmp_path / "jenkins_config" / "paths.py")
     with (
-        patch("jenkins_config.cli.sys.frozen", False, create=True),
-        patch("jenkins_config.cli.__file__", fake_cli),
+        patch("jenkins_config.paths.sys.frozen", False, create=True),
+        patch("jenkins_config.paths.__file__", fake_paths),
+        patch("jenkins_config.paths.Path.cwd", return_value=tmp_path),
     ):
         result = _resolve_config("jenkins-config.yaml")
         expected = tmp_path / "jenkins-config.yaml"
@@ -91,12 +92,13 @@ def test_resolve_specified_relative_frozen_both_missing(tmp_path):
 
 def test_resolve_auto_detect_yaml(tmp_path):
     """空参数时优先检测 .yaml"""
-    fake_cli = str(tmp_path / "jenkins_config" / "cli.py")
+    fake_paths = str(tmp_path / "jenkins_config" / "paths.py")
     (tmp_path / "jenkins-config.yaml").write_text("dummy", encoding="utf-8")
     (tmp_path / "jenkins-config.json").write_text("{}", encoding="utf-8")
     with (
-        patch("jenkins_config.cli.sys.frozen", False, create=True),
-        patch("jenkins_config.cli.__file__", fake_cli),
+        patch("jenkins_config.paths.sys.frozen", False, create=True),
+        patch("jenkins_config.paths.__file__", fake_paths),
+        patch("jenkins_config.paths.Path.cwd", return_value=tmp_path),
     ):
         result = _resolve_config("")
         assert result == tmp_path / "jenkins-config.yaml"
@@ -104,11 +106,12 @@ def test_resolve_auto_detect_yaml(tmp_path):
 
 def test_resolve_auto_detect_json_fallback(tmp_path):
     """空参数时 .yaml 不存在则降级到 .json"""
-    fake_cli = str(tmp_path / "jenkins_config" / "cli.py")
+    fake_paths = str(tmp_path / "jenkins_config" / "paths.py")
     (tmp_path / "jenkins-config.json").write_text("{}", encoding="utf-8")
     with (
-        patch("jenkins_config.cli.sys.frozen", False, create=True),
-        patch("jenkins_config.cli.__file__", fake_cli),
+        patch("jenkins_config.paths.sys.frozen", False, create=True),
+        patch("jenkins_config.paths.__file__", fake_paths),
+        patch("jenkins_config.paths.Path.cwd", return_value=tmp_path),
     ):
         result = _resolve_config("")
         assert result == tmp_path / "jenkins-config.json"
@@ -116,10 +119,11 @@ def test_resolve_auto_detect_json_fallback(tmp_path):
 
 def test_resolve_auto_detect_nonexistent(tmp_path):
     """空参数时两者都不存在，返回 yaml 路径"""
-    fake_cli = str(tmp_path / "jenkins_config" / "cli.py")
+    fake_paths = str(tmp_path / "jenkins_config" / "paths.py")
     with (
-        patch("jenkins_config.cli.sys.frozen", False, create=True),
-        patch("jenkins_config.cli.__file__", fake_cli),
+        patch("jenkins_config.paths.sys.frozen", False, create=True),
+        patch("jenkins_config.paths.__file__", fake_paths),
+        patch("jenkins_config.paths.Path.cwd", return_value=tmp_path),
     ):
         result = _resolve_config("")
         assert result == tmp_path / "jenkins-config.yaml"

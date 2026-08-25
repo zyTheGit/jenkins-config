@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .config import Config
 from .history import HistoryManager
+from .paths import resolve_history_path
 from .utils import print_header, format_duration
 
 
@@ -43,17 +44,18 @@ def list_projects(config_file: Path, env: str | None):
 
 def show_history(config_file: Path, env: str | None):
     """显示构建历史"""
-    history_file = config_file.parent / "data" / "build_history.json"
-    manager = HistoryManager(str(history_file))
+    manager = HistoryManager(str(resolve_history_path(config_file)))
     records = manager.list(env=env, limit=20)
+
 
     print_header("构建历史")
     if not records:
         print("暂无记录")
         return
 
+    icons = {"SUCCESS": "[OK]", "BUILDING": "[RUN]", "FAILURE": "[FAIL]"}
     for r in records:
-        status_icon = "[OK]" if r.status == "SUCCESS" else "[FAIL]"
+        status_icon = icons.get(r.status, "[FAIL]")
         print(
             f"  {status_icon} [{r.timestamp}] {r.job_key} #{r.build_num}"
             f" - {r.status} ({format_duration(r.duration)})"
@@ -62,12 +64,14 @@ def show_history(config_file: Path, env: str | None):
 
 def show_history_stats(config_file: Path):
     """显示历史统计"""
-    history_file = config_file.parent / "data" / "build_history.json"
-    manager = HistoryManager(str(history_file))
+    manager = HistoryManager(str(resolve_history_path(config_file)))
     stats = manager.stats()
+
 
     print_header("历史统计")
     print(f"  总构建数: {stats['total']}")
     print(f"  成功数: {stats['success']}")
     print(f"  失败数: {stats['failure']}")
+    print(f"  进行中: {stats['building']}")
+    print(f"  其他: {stats['other']}")
     print(f"  成功率: {stats['success_rate']}%")

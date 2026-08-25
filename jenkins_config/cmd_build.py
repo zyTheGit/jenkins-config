@@ -7,6 +7,7 @@
 
 import shutil
 import sys
+from contextlib import closing
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -16,6 +17,8 @@ from .jenkins import JenkinsClient, BuildStatus
 from .builder import Builder
 from .build_result import BuildResult
 from .history import HistoryManager, BuildRecord
+from .paths import resolve_history_path
+
 from .utils import (
     log_info,
     log_success,
@@ -58,11 +61,13 @@ def run_build(config_file: Path, args):
     # 覆盖分支参数
     if getattr(args, "branch", None):
         custom_branch = args.branch
-        branch_field = config.branch_field
-        log_info(f"使用自定义分支: {custom_branch} (参数名: {branch_field})")
+        # 分支参数名按 job 所属环境解析（环境级 branch_field 优先于全局）
         for job in jobs:
+            branch_field = config.branch_field_for(job.env)
+            log_info(f"使用自定义分支: {custom_branch} (参数名: {branch_field})")
             job.branch = custom_branch
             job.params[branch_field] = custom_branch
+
 
     # 显示将要构建的项目
     print_sep("-")
@@ -99,8 +104,8 @@ def run_rebuild_last(config_file: Path, args):
     print_header("重建上次构建")
 
     config = Config.load(str(config_file))
-    history_file = config_file.parent / "data" / "build_history.json"
-    manager = HistoryManager(str(history_file))
+    manager = HistoryManager(str(resolve_history_path(config_file)))
+
 
     last_group = manager.get_last_build_group()
 
@@ -164,30 +169,31 @@ def _execute_build(config, jobs, config_file, args):
     log_dir.mkdir(parents=True, exist_ok=True)
     log_info(f"日志目录: {log_dir}")
 
-    client = JenkinsClient(
-        url=config.server.url,
-        username=config.server.username,
-        token=config.server.token,
-        timeout=config.build.curl_timeout,
-    )
+    # 客户端持有 requests.Session，用 closing 确保构建结束后释放连接池
+    with closing(
+        JenkinsClient(
+            url=config.server.url,
+            username=config.server.username,
+            token=config.server.token,
+            timeout=config.build.curl_timeout,
+        )
+    ) as client:
+        # 构建前检查 Jenkins 连接
+        try:
+            client.health_check()
+        except ConnectionError as e:
+            log_error(str(e))
+            sys.exit(1)
 
-    # 构建前检查 Jenkins 连接
-    try:
-        client.health_check()
-    except ConnectionError as e:
-        log_error(str(e))
-        sys.exit(1)
+        builder = Builder(client, config)
 
-    builder = Builder(client, config)
-
-    if args.mode == "parallel":
-        results = builder.build_parallel(jobs, str(log_dir))
-    else:
-        results = builder.build_sequential(jobs, str(log_dir))
+        if args.mode == "parallel":
+            results = builder.build_parallel(jobs, str(log_dir))
+        else:
+            results = builder.build_sequential(jobs, str(log_dir))
 
     # 批量保存历史记录
-    history_file = config_file.parent / "data" / "build_history.json"
-    manager = HistoryManager(str(history_file))
+    manager = HistoryManager(str(resolve_history_path(config_file)))
 
     records = []
     for result in results:
@@ -204,9 +210,14 @@ def _execute_build(config, jobs, config_file, args):
                 branch=result.branch,
                 params=result.params,
                 project_name=result.project_name,
+                job_path=job.path if job else "",
             )
         )
-    manager.add_batch(records)
+    # 历史落盘失败（磁盘满、目录只读等）不应吞掉已完成的构建报告
+    try:
+        manager.add_batch(records)
+    except OSError as e:
+        log_warn(f"构建历史保存失败（{e}），本次构建结果仅输出报告")
 
     generate_report(results, str(log_dir))
 
