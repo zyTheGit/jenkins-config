@@ -1,6 +1,6 @@
 {
   "name": "jenkins-config-mcp",
-  "version": "1.0.0",
+  "version": "1.6.0",
   "description": "npx launcher for the jenkins-config MCP Server (Python)",
   "bin": {
     "jenkins-config-mcp": "bin/jenkins-config-mcp.js"
