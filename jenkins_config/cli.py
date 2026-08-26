@@ -8,7 +8,7 @@
 import sys
 from pathlib import Path
 
-from .paths import resolve_config_file, resolve_relative
+from .paths import resolve_config_file
 
 # 懒导入：Config 和 utils 仅在 main() 内部导入，避免启动时加载整个配置模块链
 # （config → config_io → config_types + yaml，约 0.16s）
@@ -170,8 +170,8 @@ def _resolve_config(config_arg: str) -> Path:
     """
     解析配置文件路径
 
-    如果 config_arg 为空，自动检测 jenkins-config.yaml / jenkins-config.json。
-    支持源码和 PyInstaller exe 两种运行模式。
+    完全委托 paths.resolve_config_file，避免 CLI 与 MCP 各自实现锚定规则：
+    显式路径（含 ~ 展开）优先，为空时按候选目录 + 候选文件名自动探测。
 
     Args:
         config_arg: 用户传入的路径参数，为空时自动检测
@@ -179,20 +179,7 @@ def _resolve_config(config_arg: str) -> Path:
     Returns:
         配置文件的绝对路径
     """
-    if config_arg:
-        # 用户明确指定了路径
-        path = Path(config_arg)
-        if path.is_absolute():
-            return path
-        return _resolve_relative(path)
-
-    # 自动检测：由 paths 模块统一按候选目录 + 候选文件名探测
-    return resolve_config_file()
-
-
-def _resolve_relative(config_file: Path) -> Path:
-    """根据运行模式解析相对路径（委托 paths 模块，保持 CLI 与 MCP 规则一致）"""
-    return resolve_relative(config_file)
+    return resolve_config_file(config_arg)
 
 
 if __name__ == "__main__":

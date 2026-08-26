@@ -22,28 +22,26 @@ Jenkins MCP Server 将 Jenkins 自动构建 CLI 工具的能力暴露为 [Model 
 ## 2. 前提条件
 
 - **Python 3.10+** 和 [uv](https://docs.astral.sh/uv/) 包管理器（仅源码 / 控制台入口方式需要；走 §3.2 的 npx 方式时不需要）
-- **mcp 可选依赖**：`mcp[cli]>=1.25.0,<2.0.0`（pyproject.toml 中的 `mcp` extra，安装方式见 §3.1）
+- **mcp 可选依赖**：`mcp[cli]>=1.25.0,<2.0.0`（pyproject.toml 中的 `mcp` extra，安装方式见 §3.5）
 - **Node.js 18+**（仅 §3.2 的 npx 方式需要，此时无需 Python）
-- **配置文件**：项目根目录（源码模式）或工作目录 / exe 同级目录（EXE 模式）下存在 `jenkins-config.yaml` / `jenkins-config.yml` / `jenkins-config.json`（路径探测规则见 §7.1）
+- **配置文件**：探测链上任一目录中存在 `jenkins-config.yaml` / `jenkins-config.yml` / `jenkins-config.json`——源码模式为项目根 → CWD → 用户级配置目录，EXE 模式为 CWD → exe 目录 → 用户级配置目录；也可用 `JENKINS_MCP_CONFIG` 给绝对路径（放置建议见 §3.7，完整规则见 §7.1）
 - **Jenkins 服务器可达**：MCP Server 需要能够访问配置中的 Jenkins 实例
 
 ---
 
 ## 3. 安装与配置
 
-### 3.1 安装 mcp 依赖
+### 3.1 先选运行方式
 
-MCP Server 依赖 pyproject.toml 中的可选依赖 extra `mcp`：
+| 方式 | 运行时依赖 | 适用场景 | 详见 |
+|------|-----------|---------|------|
+| **npx 启动器** | Node.js 18+ | 使用方接入，不想装 Python | §3.2 |
+| **控制台入口 / 源码** | Python 3.10+ 与 uv | 本项目的开发调试 | §3.5 |
+| **直接指定二进制** | 无 | 内网离线分发、CI | §3.2 的 `JENKINS_MCP_BINARY` |
 
-```bash
-# 源码开发环境（推荐）
-uv sync --extra mcp
+无论哪种方式，**接入客户端的动作都是同一件事**：在客户端的 MCP 配置里登记一个 stdio server，给出 `command` / `args`，需要时再给 `env`。各客户端的配置位置与登记方式见 §3.4。
 
-# 或将本项目作为包安装时
-pip install "jenkins-config[mcp]"
-```
-
-未安装 mcp 依赖时，`jenkins_config.mcp.server` 模块本身仍可被导入（依赖延迟到首次使用时才加载），但启动入口 `jenkins-config-mcp` 会输出友好提示并以退出码 1 退出：`缺少 mcp 依赖，请执行: pip install jenkins-config[mcp]`。
+装完务必按 §3.6 验证一遍——MCP 客户端对"配置写错位置"通常不报错，只是列表里没有这个 server，看起来和"装了但不工作"一模一样。
 
 ### 3.2 通过 npx 一键运行（推荐给使用方，无需 Python）
 
@@ -87,9 +85,152 @@ JENKINS_MCP_LAUNCHER_DRYRUN=1 npx -y @zythegit/jenkins-config-mcp
 
 > 二进制由 `.github/workflows/build.yml` 在 tag 推送时构建并发布，npm 包版本需与 Release tag 对齐（`v<version>`）。
 
-### 3.3 通过控制台入口运行
+### 3.3 环境变量必须写进 `env`（最常见的踩坑）
 
-适用于已安装 `jenkins-config` 包的本地开发环境。将以下配置添加到 MCP 客户端的配置文件：
+写开关、日志级别、配置路径这些变量，**只能写在 server 配置的 `env` 字段里**，在自己的 shell 里 `export` / `$env:` 是无效的：
+
+```powershell
+# ❌ 不生效：这个变量到不了 MCP Server 进程
+$env:JENKINS_MCP_ALLOW_WRITE = "1"
+```
+
+原因是 stdio 传输下客户端只把一个**平台相关的白名单子集**（Windows 大致是 `PATH` / `APPDATA` / `LOCALAPPDATA` / `TEMP` / `USERPROFILE` / `SYSTEMROOT`）传给子进程，自定义变量一律丢弃。MCP 规范给出的唯一途径就是显式声明 `env`：
+
+```json
+{
+  "mcpServers": {
+    "jenkins-build": {
+      "command": "npx",
+      "args": ["-y", "@zythegit/jenkins-config-mcp"],
+      "env": { "JENKINS_MCP_ALLOW_WRITE": "1" }
+    }
+  }
+}
+```
+
+> 部分客户端实现里自定义 `env` 是**替换**而非合并默认白名单（typescript-sdk issue #216）。若加了 `env` 之后反而起不来（`npx` 找不到），把 `PATH` 一起显式写进去。
+
+启动器本身不改环境（`spawn(..., { stdio: 'inherit' })` 直接继承），所以变量丢失一定发生在客户端到启动器这一跳。
+
+### 3.4 各客户端接入
+
+配置位置各家不同，写错文件是"配了但没生效"的头号原因。
+
+| 客户端 | 配置位置 | 备注 |
+|--------|---------|------|
+| Claude Code | `claude mcp add` 写入 `~/.claude.json`；project 作用域写仓库根的 `.mcp.json` | **不读** `claude_desktop_config.json` |
+| Claude Desktop | macOS `~/Library/Application Support/Claude/claude_desktop_config.json`、Windows `%APPDATA%\Claude\claude_desktop_config.json` | 与 Claude Code 互不相通 |
+| Cursor | 项目内 `.cursor/mcp.json`，或全局 `~/.cursor/mcp.json` | |
+| VS Code (Copilot) | 项目内 `.vscode/mcp.json` | 顶层键是 `servers`，不是 `mcpServers` |
+| MCP Inspector | 无配置文件，界面上填 | 变量填在 Environment Variables 面板 |
+
+#### Claude Code
+
+用 CLI 登记最稳妥，不必手写 JSON、也不会写错层级：
+
+```bash
+claude mcp add jenkins-build -e JENKINS_MCP_ALLOW_WRITE=1 -- npx -y @zythegit/jenkins-config-mcp
+```
+
+`--` 之后的内容原样作为 `command` + `args`，不加 `--` 的话 `-y` 会被 `claude` 自己吃掉。作用域用 `-s` / `--scope` 指定：
+
+- `local`（默认）— 写入 `~/.claude.json` 的 `projects.<当前目录>.mcpServers`，只在该目录下生效，不进版本库
+- `project` — 写入仓库根的 `.mcp.json`，随代码提交、团队共享
+- `user` — 写入 `~/.claude.json` 顶层 `mcpServers`，所有项目可用
+
+配置文件在仓库里时用 `local` 或 `project`（Server 能从项目根探测到 `jenkins-config.yaml`）；要 `user` 全局可用，得同时用 `JENKINS_MCP_CONFIG` 给出配置文件的**绝对路径**，见 §3.7。
+
+`project` 作用域也可以直接手写仓库根的 `.mcp.json`：
+
+```json
+{
+  "mcpServers": {
+    "jenkins-build": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@zythegit/jenkins-config-mcp"],
+      "env": { "JENKINS_MCP_ALLOW_WRITE": "1" }
+    }
+  }
+}
+```
+
+验证与排查：
+
+```bash
+claude mcp list           # 会实际拉起 server 做健康检查，输出 ✓ Connected
+claude mcp get jenkins-build
+claude mcp remove jenkins-build
+```
+
+改完配置**必须重开 Claude Code**：MCP 配置只在启动时读取，不热加载。重开后 `/mcp` 里应出现 `jenkins-build` 及其 11 个工具。
+
+排查顺序也建议照此：先 `claude mcp list` 确认登记成功（没登记 → 配置写错了地方），再看 `/mcp` 确认当前会话已加载（登记了但列表里没有 → 没重启）。
+
+#### Claude Desktop
+
+编辑 `claude_desktop_config.json`（macOS `~/Library/Application Support/Claude/`、Windows `%APPDATA%\Claude\`）后**完全退出并重启**应用——关窗口不算，Windows 要从托盘退出：
+
+```json
+{
+  "mcpServers": {
+    "jenkins-build": {
+      "command": "npx",
+      "args": ["-y", "@zythegit/jenkins-config-mcp"],
+      "env": { "JENKINS_MCP_ALLOW_WRITE": "1" }
+    }
+  }
+}
+```
+
+启动失败时看客户端日志：macOS `~/Library/Logs/Claude/mcp-server-jenkins-build.log`、Windows `%APPDATA%\Claude\logs\`。Server 的日志全部走 stderr，会落在这里。
+
+#### Cursor
+
+项目内 `.cursor/mcp.json`（或全局 `~/.cursor/mcp.json`），格式同上。改完在 Settings → MCP 里点 Refresh。
+
+#### VS Code (GitHub Copilot)
+
+项目内 `.vscode/mcp.json`，注意顶层键是 `servers`：
+
+```json
+{
+  "servers": {
+    "jenkins-build": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@zythegit/jenkins-config-mcp"],
+      "env": { "JENKINS_MCP_ALLOW_WRITE": "1" }
+    }
+  }
+}
+```
+
+VS Code 的 Agent Host 不直接读 `.vscode/mcp.json`；需要跨工具通用时，改放工作区 `.mcp.json` 或 `~/.copilot/mcp-config.json`。
+
+#### MCP Inspector
+
+Inspector 没有配置文件，Command 填 `npx`、Arguments 填 `-y @zythegit/jenkins-config-mcp`。变量要在左侧 **Environment Variables** 面板里 Add（Key `JENKINS_MCP_ALLOW_WRITE`、Value `1`），填完 Disconnect 再 Connect 才生效——终端里 export 同样无效，理由见 §3.3。
+
+调本地源码则用：
+
+```bash
+uv run mcp dev jenkins_config/mcp/server.py
+```
+
+### 3.5 通过控制台入口运行（需要 Python）
+
+适用于已安装 `jenkins-config` 包的本地开发环境。先装 pyproject.toml 中的可选依赖 extra `mcp`：
+
+```bash
+# 源码开发环境（推荐）
+uv sync --extra mcp
+
+# 或将本项目作为包安装时
+pip install "jenkins-config[mcp]"
+```
+
+未安装 mcp 依赖时，`jenkins_config.mcp.server` 模块本身仍可被导入（依赖延迟到首次使用时才加载），但启动入口 `jenkins-config-mcp` 会输出友好提示并以退出码 1 退出：`缺少 mcp 依赖，请执行: pip install jenkins-config[mcp]`。
 
 **Claude Desktop** (`claude_desktop_config.json`)：
 
@@ -133,7 +274,7 @@ JENKINS_MCP_LAUNCHER_DRYRUN=1 npx -y @zythegit/jenkins-config-mcp
 }
 ```
 
-### 3.4 本地开发模式
+### 3.6 本地开发模式
 
 适用于开发调试，直接运行 Python 模块（效果与 `jenkins-config-mcp` 入口一致）：
 
@@ -151,6 +292,58 @@ JENKINS_MCP_LAUNCHER_DRYRUN=1 npx -y @zythegit/jenkins-config-mcp
   }
 }
 ```
+
+Claude Code 下等价的登记命令：
+
+```bash
+claude mcp add jenkins-build -- uv run --directory /path/to/jenkins-config jenkins-config-mcp
+```
+
+### 3.7 配置文件放在哪里
+
+npx / EXE 方式没有"项目目录"这个概念，Server 由客户端拉起时 CWD 可能是 `/` 或家目录，所以**必须让它能找到 `jenkins-config.yaml`**。两种做法：
+
+1. 放到用户级配置目录（探测链的末位，最省事）：
+   - Linux `~/.config/jenkins-config/jenkins-config.yaml`
+   - macOS `~/Library/Application Support/jenkins-config/jenkins-config.yaml`
+   - Windows `%LOCALAPPDATA%\jenkins-config\jenkins-config.yaml`
+2. 用 `JENKINS_MCP_CONFIG` 显式指路（**只接受绝对路径**，相对路径会记 warning 后按未设置处理）：
+
+```json
+{
+  "mcpServers": {
+    "jenkins-build": {
+      "command": "npx",
+      "args": ["-y", "@zythegit/jenkins-config-mcp"],
+      "env": {
+        "JENKINS_MCP_CONFIG": "C:\\work\\jenkins-config\\jenkins-config.yaml",
+        "JENKINS_MCP_ALLOW_WRITE": "1"
+      }
+    }
+  }
+}
+```
+
+该变量**只对 MCP Server 生效**，CLI 的探测不读它——否则为客户端导出一次，项目目录里的 `jenkins-build` 也会跟着换配置。完整的解析顺序与构建历史落盘位置见 §7.1 / §7.4。
+
+配置文件用 CLI 生成：`jenkins-build --init -i`（或 `./jenkins-auto-build.sh --init -i`）。
+
+### 3.8 验证安装
+
+按这个顺序走，每步都能把问题圈到一层：
+
+```bash
+# 1. 包能下到、平台二进制能解析出来（只打印命令，不启动）
+JENKINS_MCP_LAUNCHER_DRYRUN=1 npx -y @zythegit/jenkins-config-mcp
+
+# 2. 客户端确实登记了这个 server（Claude Code）
+claude mcp list
+```
+
+3. 重启客户端，确认工具列表里有 `jenkins-build`（Claude Code 用 `/mcp`）。
+4. 调 `list_environments` — 通了说明配置文件找到了。
+5. 调 `health_check` — 这是唯一能证明 Jenkins 地址与 token 都有效的工具，返回 `reachable: true` 才算真正可用。
+6. 需要写操作时再调 `trigger_build`；若返回「已禁止写操作」，说明 `JENKINS_MCP_ALLOW_WRITE` 没送达，回到 §3.3。
 
 ---
 
@@ -404,22 +597,27 @@ MCP Prompts 提供预定义的交互流程模板，帮助 AI Agent 引导用户�
 
 ### 7.1 配置文件解析规则
 
-各工具的 `config_path` 参数为空时，由 `resolve_config_path` 自动探测，锚定规则与 CLI 对齐：
+各工具的 `config_path` 参数为空时，由 `resolve_config_path` 自动探测，锚定规则与 CLI 对齐（唯一差异是 `JENKINS_MCP_CONFIG` 只在 MCP 侧生效）：
 
 | 优先级 | 规则 |
 |--------|------|
-| 1 | 显式传入的 `config_path` 原样使用 |
-| 2（源码模式） | 先探测**项目根目录**（与 CLI 源码模式锚定项目根的行为一致），再回退进程当前工作目录 |
-| 2（EXE 冻结模式） | 先探测进程当前工作目录，再探测 exe 所在目录（与 CLI EXE 模式一致） |
+| 1 | 显式传入的 `config_path`（绝对路径原样使用；相对路径按候选目录锚定） |
+| 2 | 环境变量 `JENKINS_MCP_CONFIG` 指向的文件，**只接受绝对路径**，相对值记 warning 后忽略；仅 MCP Server 生效 |
+| 3（源码模式） | 依次探测 项目根目录 → 进程当前工作目录 → 用户级配置目录 |
+| 3（EXE 冻结模式） | 依次探测 进程当前工作目录 → exe 所在目录 → 用户级配置目录 |
 | 支持文件名 | `jenkins-config.yaml` / `jenkins-config.yml` / `jenkins-config.json`（与 CLI 一致） |
-| 均未找到 | 返回默认值 `jenkins-config.yaml`（后续加载时报"配置文件不存在"） |
+| 均未找到 | 返回首个候选目录下的 `jenkins-config.yaml`（后续加载时报"配置文件不存在"） |
+
+候选目录末位固定为用户级配置目录：MCP Server 由客户端以 stdio 拉起，CWD 可能是 `/` 或家目录，只靠项目根 / CWD / exe 目录探测不可靠。
 
 因此：
 
-- AI 客户端以任意工作目录拉起 MCP Server 时，只要项目根目录存在配置文件即可正确读写同一份配置；
-- 若项目根与进程 CWD 下同时存在配置文件，**项目根目录优先**（源码模式）；如需指定其他路径，请在每次调用工具时通过 `config_path` 参数显式传入。
+- AI 客户端以任意工作目录拉起 MCP Server 时，只要探测链上有一份配置文件即可正确读写同一份配置；
+- 多个候选目录同时存在配置文件时按上表顺序取第一个；要指定其他路径，用 `JENKINS_MCP_CONFIG`（一次性设定）或在每次调用工具时显式传 `config_path`。
 
-历史文件路径（`trigger_build` / `rebuild_last` / `show_history` 等使用）始终锚定到**配置文件所在目录**的 `data/build_history.json`。
+调用方传入的 `config_path` 还受白名单约束：必须落在 `paths.search_bases()` 之内，或恰好是 `JENKINS_MCP_CONFIG` 指向的那个文件（该变量由部署方设定，属可信来源；其父目录**不**整树放行）。越界直接抛 `PermissionError`，可用 `JENKINS_MCP_CONFIG_ROOTS` 扩展。
+
+历史文件路径（`trigger_build` / `rebuild_last` / `show_history` 等使用）默认锚定到**配置文件所在目录**的 `data/build_history.json`；配置来自用户级配置目录时改锚到用户级数据目录，详见 §7.4。
 
 ### 7.2 历史文件并发写入
 
@@ -439,13 +637,32 @@ MCP Prompts 提供预定义的交互流程模板，帮助 AI Agent 引导用户�
 |----------|------|------|
 | `JENKINS_MCP_ALLOW_WRITE` | 未设置（只读） | 设为 `1`/`true`/`yes`/`on` 才允许写操作（`trigger_build`、`rebuild_last`、`save_config`）；未设置时这些工具直接返回拒绝信息，其余只读工具不受影响 |
 | `JENKINS_MCP_ALLOWED_HOSTS` | 未设置 | 逗号分隔的主机白名单，用于放行 `rebuild_last` 直连模式的 `jenkins_url`。**一旦设置即为唯一权威来源**，不再叠加配置文件中的主机（否则客户端只要在自己的 CWD 放一份 `jenkins-config.yaml` 就能扩大白名单）；未设置时退回**自动探测到的**配置文件中 `server.url` 的同一 host（不采用调用方传入的 `config_path`）；两者都取不到时任何 `jenkins_url` 都会被拒绝 |
-| `JENKINS_MCP_CONFIG_ROOTS` | 未设置 | `os.pathsep` 分隔的目录白名单，用于扩展允许读写的配置文件根目录。默认只允许 `paths.search_bases()`（项目根 / CWD / exe 目录）之内的路径；调用方传入的 `config_path` 解析后若落在白名单之外，直接抛 `PermissionError`，避免用自带配置绕过主机白名单或让 `save_config` 覆写任意 YAML |
-
+| `JENKINS_MCP_CONFIG` | 未设置 | 直接指定配置文件路径，**优先于探测规则，且只对 MCP Server 生效**（CLI 的自动探测不读它，避免为客户端导出该变量后连 `jenkins-build` 的行为一起改掉）。**只接受绝对路径**：相对值仍受 CWD 影响，会记一条 warning 后按未设置处理。该变量由部署方设定，属可信来源，其指向的**那一个文件**自动放行；父目录不整树进入白名单 |
+| `JENKINS_MCP_CONFIG_ROOTS` | 未设置 | `os.pathsep` 分隔的目录白名单，用于扩展允许读写的配置文件根目录。默认只允许 `paths.search_bases()`（项目根 / CWD / exe 目录 / 用户级配置目录）之内的路径；调用方传入的 `config_path` 解析后若落在白名单之外，直接抛 `PermissionError`，避免用自带配置绕过主机白名单或让 `save_config` 覆写任意 YAML |
+| `JENKINS_MCP_LOG_LEVEL` | `WARNING` | 根 logger 级别，取值限于 `DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL`；其它值一律退回 `WARNING` |
+| `JENKINS_MCP_LOG_FILE` | 未设置（只输出 stderr） | 文件日志路径；设为 `auto`（或 `1`/`true`/`yes`/`on`）时落到用户级日志目录的 `jenkins-config-mcp.<pid>.log`——每个客户端各自拉起一个 Server 进程，文件名带进程号才能避免多进程共写同一文件时轮转失败。轮转策略 1 MB × 3 份；目录不可写时降级为仅 stderr，不影响启动 |
 
 
 推荐部署方式：默认不设 `JENKINS_MCP_ALLOW_WRITE`，让 MCP Server 处于只读模式；需要 AI 代为触发构建时，再在客户端的 server 配置中显式注入该变量。
 
+### 7.4 配置与数据文件的放置位置
+
+
+stdout 是 JSON-RPC 通道，**日志一律走 stderr**，客户端会自行落盘（如 Claude Desktop 的 `~/Library/Logs/Claude/mcp-server-*.log`、Windows `%APPDATA%\Claude\logs\`）；只有显式设置 `JENKINS_MCP_LOG_FILE` 时才额外写文件。
+
+用户级目录由 `platformdirs` 按操作系统规范给出（`jenkins_config/paths.py` 中的 `user_config_dir()` / `user_data_dir()` / `user_log_dir()`）：
+
+- 配置：Linux `~/.config/jenkins-config/`、macOS `~/Library/Application Support/jenkins-config/`、Windows `%LOCALAPPDATA%\jenkins-config\`
+- 数据（构建历史）：Linux `~/.local/share/jenkins-config/`、Windows `%LOCALAPPDATA%\jenkins-config\`（与配置目录同一位置，见下）
+- 日志：Linux `~/.local/state/jenkins-config/log/`、macOS `~/Library/Logs/jenkins-config/`、Windows `%LOCALAPPDATA%\jenkins-config\Logs\`
+
+配置文件解析优先级：显式参数 `config_path` → `JENKINS_MCP_CONFIG`（仅 MCP，绝对路径）→ 候选目录探测（源码模式 `项目根 → CWD → 用户配置目录`，EXE 模式 `CWD → exe 目录 → 用户配置目录`）。
+
+构建历史默认写在配置文件同级的 `data/build_history.json`；但配置来自**用户级配置目录**时改写到用户级数据目录——npx 缓存目录带版本号（`~/.cache/jenkins-config-mcp/<tag>/`），升级换目录会丢历史。注意 Windows 下 platformdirs 的配置目录与数据目录是同一个 `%LOCALAPPDATA%\jenkins-config`，因此该分支的实际效果是把历史从 `<配置目录>\data\` 提到 `<配置目录>\` 下，而非落到另一个目录。
+
+
 ---
+
 
 ## 8. 测试
 
@@ -486,6 +703,10 @@ uv run mcp dev jenkins_config/mcp/server.py
 
 | 问题 | 可能原因 | 解决方案 |
 |------|----------|----------|
+| 客户端里根本看不到这个 server | 配置写到了客户端不读的文件（如给 Claude Code 写了 `claude_desktop_config.json`） | 按 §3.4 确认配置位置；Claude Code 用 `claude mcp list` 验证是否登记成功 |
+| 登记成功但当前会话看不到 | MCP 配置只在启动时读取 | 重启客户端（Claude Desktop 需完全退出，Windows 从托盘退出） |
+| `env` 里的变量像没生效 | 在 shell 里 `export` 了，没写进 server 配置的 `env` | 见 §3.3；Inspector 用 Environment Variables 面板 |
+| 加了 `env` 后 server 起不来 | 客户端把自定义 `env` 当替换而非合并，`PATH` 丢了 | 在 `env` 里一并显式给出 `PATH` |
 | 启动即退出并提示缺少依赖 | 未安装 `mcp` extra | 执行 `uv sync --extra mcp` 或 `pip install "jenkins-config[mcp]"` |
 | 连接失败 | Jenkins 服务器不可达 | 检查网络和 `jenkins-config.yaml` 中的服务器地址 |
 | 配置文件不存在 | 未创建配置文件 | 运行 `jenkins-build --init` 初始化配置 |

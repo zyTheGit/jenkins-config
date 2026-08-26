@@ -27,13 +27,14 @@ TARGETS = {
         'hidden_imports': [
             'requests', 'questionary', 'prompt_toolkit', 'prompt_toolkit.input',
             'prompt_toolkit.output', 'prompt_toolkit.styles', 'wcwidth', 'yaml',
+            'platformdirs',
         ],
         'collect_all': [],
     },
     'mcp': {
         'name': 'jenkins-config-mcp',
         'entry': 'entry_point_mcp.py',
-        'hidden_imports': ['requests', 'yaml'],
+        'hidden_imports': ['requests', 'yaml', 'platformdirs'],
         'collect_all': [
             'mcp', 'pydantic', 'pydantic_core', 'pydantic_settings',
             'jsonschema', 'jsonschema_specifications', 'anyio', 'httpx',
@@ -61,18 +62,18 @@ def _binary_name(target: str = 'cli') -> str:
 def clean_build():
     """清理构建目录"""
     print("正在清理构建目录...")
-    
+
     dirs_to_clean = ['build', 'dist', '__pycache__']
     for dir_name in dirs_to_clean:
         if Path(dir_name).exists():
             shutil.rmtree(dir_name)
             print(f"  已删除: {dir_name}/")
-    
+
     # 删除所有 .spec 文件，确保下次打包使用最新配置（特别是图标变更）
     for spec_file in Path('.').glob('*.spec'):
         spec_file.unlink()
         print(f"  已删除: {spec_file}")
-    
+
     print("清理完成！\n")
 
 
@@ -88,7 +89,7 @@ def build_exe(mode='onefile', args=None, target='cli'):
     spec = TARGETS[target]
     print(f"开始打包 {spec['name']} ({mode} 模式)...\n")
 
-    
+
     # 检查 PyInstaller 是否安装
     try:
         import PyInstaller
@@ -154,23 +155,23 @@ def build_exe(mode='onefile', args=None, target='cli'):
     # 执行打包
     print(f"执行命令: {' '.join(cmd)}\n")
     result = subprocess.run(cmd)
-    
+
     if result.returncode == 0:
         print("\n" + "=" * 60)
         print("打包成功！")
         print("=" * 60)
-        
+
         if mode == 'onefile':
             exe_path = Path(f'dist/{_binary_name(target)}')
         else:
             exe_path = Path(f"dist/{spec['name']}/{_binary_name(target)}")
-        
+
         if exe_path.exists():
             size_mb = exe_path.stat().st_size / (1024 * 1024)
             print(f"\n输出文件: {exe_path.absolute()}")
             print(f"文件大小: {size_mb:.2f} MB")
             print(f"图标来源: {icon_source}")
-        
+
         if target == 'mcp':
             print("\n使用方法:")
             print(f"  {exe_path}   # 以 stdio 传输启动 MCP Server（由 MCP 客户端拉起）")
@@ -197,7 +198,7 @@ def build_exe(mode='onefile', args=None, target='cli'):
 def main():
     parser = argparse.ArgumentParser(description='Jenkins 构建工具打包脚本')
     parser.add_argument(
-        '--clean', 
+        '--clean',
         action='store_true',
         help='清理构建目录后重新打包'
     )
@@ -216,16 +217,16 @@ def main():
         default='cli',
         help='构建目标：cli（默认，jenkins-build）、mcp（jenkins-config-mcp）或 all'
     )
-    
+
     args = parser.parse_args()
-    
+
     # 切换到项目根目录
     project_root = Path(__file__).parent
     os.chdir(project_root)
-    
+
     if args.clean:
         clean_build()
-    
+
     mode = 'dir' if args.dir else 'onefile'
     targets = ['cli', 'mcp'] if args.target == 'all' else [args.target]
     for target in targets:

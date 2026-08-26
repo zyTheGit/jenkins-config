@@ -328,7 +328,6 @@ def test_resolve_config_path_rejects_path_outside_allowed_roots(tmp_path, monkey
         resolve_config_path(str(tmp_path / "outside" / "config.yaml"))
 
 
-
 def test_resolve_config_path_source_mode_anchors_to_project_root(tmp_path, monkeypatch):
     """验证源码模式下先锚定项目根目录（与 CLI 对齐），即使 CWD 无配置也能找到"""
     from jenkins_config import paths
@@ -400,3 +399,178 @@ def test_resolve_history_path_anchors_to_config_dir(tmp_path):
 
     config_file = tmp_path / "jenkins-config.yaml"
     assert resolve_history_path(str(config_file)) == tmp_path / "data" / "build_history.json"
+
+
+def test_resolve_config_path_prefers_env_var(tmp_path, monkeypatch):
+    """验证 JENKINS_MCP_CONFIG 优先于候选目录探测（stdio 下 CWD 不可控）"""
+    from jenkins_config import paths
+    from jenkins_config.mcp import utils
+
+    # CWD 里放一份配置，环境变量指向另一处，应取环境变量那份
+    cwd_config = tmp_path / "cwd"
+    cwd_config.mkdir()
+    (cwd_config / "jenkins-config.yaml").write_text("server: {}", encoding="utf-8")
+    monkeypatch.chdir(cwd_config)
+
+    env_config = tmp_path / "elsewhere" / "jenkins-config.yaml"
+    env_config.parent.mkdir()
+    env_config.write_text("server: {}", encoding="utf-8")
+    monkeypatch.setenv(paths.CONFIG_ENV_VAR, str(env_config))
+
+    assert utils.resolve_config_path() == str(env_config.resolve())
+
+
+def test_env_config_file_is_allowed_exactly(tmp_path, monkeypatch):
+    """验证环境变量指定的文件精确放行，但其父目录不整树进入白名单"""
+    from jenkins_config import paths
+    from jenkins_config.mcp import utils
+
+    env_config = tmp_path / "deploy" / "jenkins-config.yaml"
+    env_config.parent.mkdir()
+    env_config.write_text("server: {}", encoding="utf-8")
+    sibling = env_config.parent / "secret.yaml"
+    sibling.write_text("server: {}", encoding="utf-8")
+    monkeypatch.setenv(paths.CONFIG_ENV_VAR, str(env_config))
+    # 覆盖 conftest 放行整个 basetemp 的默认白名单，否则同目录文件也会被放行
+    monkeypatch.setenv(utils.CONFIG_ROOTS_ENV_VAR, str(tmp_path / "nowhere"))
+
+    # 环境变量那一个文件放行
+    assert utils.resolve_config_path() == str(env_config.resolve())
+    # 同目录下的其他文件不放行
+    assert env_config.parent.resolve() not in utils.allowed_config_bases()
+    with pytest.raises(PermissionError, match="不在允许范围内"):
+        utils.resolve_config_path(str(sibling))
+
+
+def test_env_config_does_not_affect_cli_probe(tmp_path, monkeypatch):
+    """验证 JENKINS_MCP_CONFIG 不影响 CLI 的自动探测（否则导出该变量会改掉 CLI 行为）"""
+    from jenkins_config import paths
+
+    root = tmp_path / "repo"
+    (root / "jenkins_config").mkdir(parents=True)
+    project_config = root / "jenkins-config.yaml"
+    project_config.write_text("server: {}", encoding="utf-8")
+    monkeypatch.setattr(paths, "__file__", str(root / "jenkins_config" / "paths.py"))
+    monkeypatch.chdir(tmp_path)
+
+    env_config = tmp_path / "elsewhere" / "jenkins-config.yaml"
+    env_config.parent.mkdir()
+    env_config.write_text("server: {}", encoding="utf-8")
+    monkeypatch.setenv(paths.CONFIG_ENV_VAR, str(env_config))
+
+    assert paths.resolve_config_file() == project_config
+
+
+def test_env_config_file_rejects_relative_value(tmp_path, monkeypatch):
+    """验证相对路径的 JENKINS_MCP_CONFIG 被忽略——相对值仍受 CWD 影响，失去确定性"""
+    from jenkins_config import paths
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(paths.CONFIG_ENV_VAR, "jenkins-config.yaml")
+
+    assert paths.env_config_file() is None
+
+
+def test_search_bases_includes_user_config_dir():
+    """验证候选目录末位是用户级配置目录（MCP 部署的稳定落点）"""
+    from jenkins_config.paths import search_bases, user_config_dir
+
+    assert search_bases()[-1] == user_config_dir()
+
+
+def test_cli_resolve_config_expands_user_home():
+    """验证 CLI 的 -c 参数与 MCP 侧一致地展开 ~（两侧共用 paths.resolve_config_file）"""
+    from pathlib import Path
+
+    from jenkins_config.cli import _resolve_config
+
+    result = _resolve_config("~/jenkins-config.yaml")
+
+    assert result == Path.home() / "jenkins-config.yaml"
+
+
+def test_resolve_config_path_falls_back_to_user_config_dir(tmp_path, monkeypatch):
+    """验证项目根与 CWD 都没有配置时，能从用户级配置目录找到"""
+    from jenkins_config import paths
+    from jenkins_config.mcp import utils
+
+    root = tmp_path / "repo"
+    (root / "jenkins_config").mkdir(parents=True)
+    monkeypatch.setattr(paths, "__file__", str(root / "jenkins_config" / "paths.py"))
+
+    empty_cwd = tmp_path / "elsewhere"
+    empty_cwd.mkdir()
+    monkeypatch.chdir(empty_cwd)
+
+    user_dir = tmp_path / "userconfig"
+    user_dir.mkdir()
+    expected = user_dir / "jenkins-config.yaml"
+    expected.write_text("server: {}", encoding="utf-8")
+    monkeypatch.setattr(paths, "user_config_dir", lambda: user_dir)
+
+    assert utils.resolve_config_path() == str(expected.resolve())
+
+
+def test_resolve_history_path_redirects_for_user_config_dir(tmp_path, monkeypatch):
+    """验证配置位于用户级配置目录时，历史改锚到用户级数据目录
+
+    npx 缓存目录带版本号，升级即换目录；用户级数据目录才能跨版本保留历史。
+    """
+    from jenkins_config import paths
+
+    user_config = tmp_path / "userconfig"
+    user_data = tmp_path / "userdata"
+    monkeypatch.setattr(paths, "user_config_dir", lambda: user_config)
+    monkeypatch.setattr(paths, "user_data_dir", lambda: user_data)
+
+    result = paths.resolve_history_path(str(user_config / "jenkins-config.yaml"))
+
+    assert result == user_data / "build_history.json"
+
+
+def test_resolve_history_path_keeps_legacy_data_dir(tmp_path, monkeypatch):
+    """验证旧路径已有历史文件时继续沿用，避免升级后历史凭空清空"""
+    from jenkins_config import paths
+
+    user_config = tmp_path / "userconfig"
+    user_data = tmp_path / "userdata"
+    legacy = user_config / "data" / "build_history.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(paths, "user_config_dir", lambda: user_config)
+    monkeypatch.setattr(paths, "user_data_dir", lambda: user_data)
+
+    result = paths.resolve_history_path(str(user_config / "jenkins-config.yaml"))
+
+    assert result == legacy
+
+
+def test_allowed_config_bases_drops_overly_broad_roots(tmp_path, monkeypatch):
+    """验证文件系统根与家目录不进入配置白名单
+
+    stdio 拉起时 CWD 不可控，若把 `/` 或家目录当作允许根目录，
+    _is_within 对任意路径都成立，等于整个白名单全放行。
+    """
+    from jenkins_config import paths
+    from jenkins_config.mcp import utils
+
+    fs_root = Path(tmp_path.anchor)
+    home = Path.home().resolve()
+    monkeypatch.setattr(paths, "search_bases", lambda: [fs_root, home, tmp_path])
+    monkeypatch.setattr(utils, "search_bases", lambda: [fs_root, home, tmp_path])
+    monkeypatch.delenv(utils.CONFIG_ROOTS_ENV_VAR, raising=False)
+
+    bases = utils.allowed_config_bases()
+
+    assert bases == [tmp_path.resolve()]
+
+
+def test_config_roots_env_var_is_not_filtered(tmp_path, monkeypatch):
+    """验证 JENKINS_MCP_CONFIG_ROOTS 是部署方显式设定，不参与"过宽"过滤"""
+    from jenkins_config.mcp import utils
+
+    home = Path.home().resolve()
+    monkeypatch.setattr(utils, "search_bases", lambda: [tmp_path])
+    monkeypatch.setenv(utils.CONFIG_ROOTS_ENV_VAR, str(home))
+
+    assert home in utils.allowed_config_bases()

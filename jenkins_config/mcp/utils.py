@@ -8,17 +8,28 @@ MCP Tools 共享工具函数
 from __future__ import annotations
 
 import json
+import logging
 import os
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
 from jenkins_config.paths import (
+    CONFIG_ENV_VAR,
     CONFIG_FILE_NAMES,
+    env_config_file,
     resolve_config_file,
     search_bases,
     resolve_history_path as _resolve_history_path,
 )
+
+
+logger = logging.getLogger(__name__)
+
+# 被视为"开启"的环境变量取值（统一一处，避免各处枚举漂移）
+TRUTHY_VALUES = ("1", "true", "yes", "on")
+
+
 
 # 开启写操作（触发构建、覆写配置）所需的环境变量
 WRITE_ENV_VAR = "JENKINS_MCP_ALLOW_WRITE"
@@ -30,10 +41,13 @@ ALLOWED_HOSTS_ENV_VAR = "JENKINS_MCP_ALLOWED_HOSTS"
 CONFIG_ROOTS_ENV_VAR = "JENKINS_MCP_CONFIG_ROOTS"
 
 __all__ = [
+    "CONFIG_ENV_VAR",
     "CONFIG_FILE_NAMES",
     "WRITE_ENV_VAR",
     "ALLOWED_HOSTS_ENV_VAR",
     "CONFIG_ROOTS_ENV_VAR",
+    "TRUTHY_VALUES",
+    "env_truthy",
     "allowed_config_bases",
     "resolve_config_path",
     "resolve_history_path",
@@ -59,8 +73,17 @@ def allowed_config_bases() -> list[Path]:
     任意 server.url（配置文件由调用方自带），也能让 save_config 覆写
     工作目录之外的任意 YAML。因此把可用目录收敛为：
 
-    1. jenkins_config.paths.search_bases()（项目根 / CWD / exe 目录）；
+    1. jenkins_config.paths.search_bases()（项目根 / CWD / exe 目录 / 用户配置目录）；
     2. 环境变量 JENKINS_MCP_CONFIG_ROOTS 显式追加的目录（os.pathsep 分隔）。
+
+    JENKINS_MCP_CONFIG 指向的文件由 resolve_config_path 单独按**精确文件**放行，
+    不在这里追加其父目录——否则部署方把配置放在宽目录（如家目录）时，
+    整棵目录树都会变成可读写范围。
+
+    自动探测出的候选目录还会过一道"过宽"过滤：stdio 拉起时 CWD 不可控，
+    可能就是文件系统根或用户家目录，那样 _is_within 对任意路径都成立，
+    整个白名单等于全放行。这类候选直接剔除；
+    JENKINS_MCP_CONFIG_ROOTS 是部署方显式设定的，不参与过滤。
 
     Returns:
         已解析为绝对路径的根目录列表
@@ -69,7 +92,7 @@ def allowed_config_bases() -> list[Path]:
         >>> len(allowed_config_bases()) >= 2
         True
     """
-    bases = [base.resolve() for base in search_bases()]
+    bases = [base for base in (b.resolve() for b in search_bases()) if not _is_too_broad(base)]
     for item in os.environ.get(CONFIG_ROOTS_ENV_VAR, "").split(os.pathsep):
         root = item.strip()
         if root:
@@ -77,28 +100,64 @@ def allowed_config_bases() -> list[Path]:
     return bases
 
 
-def resolve_config_path(config_path: str = "") -> str:
-    """解析配置文件路径，为空则自动检测（锚定规则见 jenkins_config.paths）
-
-    实现委托给 jenkins_config.paths.resolve_config_file，
-    与 CLI 共用同一套候选目录与候选文件名，避免两侧规则漂移；
-    解析结果还必须落在 allowed_config_bases() 之内，
-    否则调用方可以用自带的配置文件绕过主机白名单或覆写任意文件。
+def _is_too_broad(base: Path) -> bool:
+    """判断候选根目录是否过宽，不足以作为安全边界
 
     Args:
-        config_path: 显式指定的配置文件路径，为空时自动检测
+        base: 已解析为绝对路径的候选根目录
+
+    Returns:
+        base 是文件系统根或用户家目录本身时返回 True
+
+    Example:
+        >>> _is_too_broad(Path(Path.cwd().anchor))
+        True
+    """
+    if base.parent == base:
+        logger.warning("候选目录 %s 为文件系统根，已从配置白名单剔除", base)
+        return True
+    try:
+        home = Path.home().resolve()
+    except RuntimeError:
+        return False
+    if base == home:
+        logger.warning("候选目录 %s 为用户家目录，已从配置白名单剔除", base)
+        return True
+    return False
+
+
+def resolve_config_path(config_path: str = "") -> str:
+    """解析配置文件路径，为空则按环境变量 / 自动探测
+
+    优先级：显式参数 > JENKINS_MCP_CONFIG（仅 MCP 侧生效，绝对路径）> 候选目录探测。
+    环境变量在这里折算为 resolve_config_file 的入参，paths 模块本身不读它，
+    避免该变量顺带改变 CLI 的自动探测结果。
+
+    解析结果必须落在 allowed_config_bases() 之内，或恰好等于 JENKINS_MCP_CONFIG
+    指向的那一个文件（部署方设定，属可信来源），否则调用方可以用自带的配置文件
+    绕过主机白名单或覆写任意文件。
+
+    Args:
+        config_path: 显式指定的配置文件路径，为空时按环境变量 / 自动检测
 
     Returns:
         配置文件的绝对路径字符串
 
     Raises:
-        PermissionError: 解析结果不在允许的根目录内
+        PermissionError: 解析结果不在允许范围内
 
     Example:
         >>> resolve_config_path()  # doctest: +SKIP
         '/path/to/jenkins-config.yaml'
     """
+    from_env = env_config_file()
+    if not config_path and from_env is not None:
+        config_path = str(from_env)
+
     resolved = resolve_config_file(config_path).resolve()
+    if from_env is not None and resolved == from_env.resolve():
+        return str(resolved)
+
     bases = allowed_config_bases()
     if not any(_is_within(resolved, base) for base in bases):
         raise PermissionError(
@@ -119,7 +178,7 @@ def _is_within(path: Path, base: Path) -> bool:
         path 等于 base 或位于 base 之下时返回 True
 
     Example:
-        >>> _is_within(Path("/a/b/c.yaml"), Path("/a"))
+        >>> _is_within(Path.cwd() / "sub" / "c.yaml", Path.cwd())
         True
     """
     try:
@@ -129,11 +188,11 @@ def _is_within(path: Path, base: Path) -> bool:
         return False
 
 
-
 def resolve_history_path(config_path: str = "") -> Path:
     """解析构建历史文件路径
 
-    锚定到配置文件所在目录的 data/build_history.json，
+    默认锚定到配置文件所在目录的 data/build_history.json；
+    配置来自用户级配置目录时改锚到用户级数据目录（npx / EXE 部署场景），
     实现委托给 jenkins_config.paths.resolve_history_path。
 
     Args:
@@ -147,7 +206,6 @@ def resolve_history_path(config_path: str = "") -> Path:
         PosixPath('/path/to/data/build_history.json')
     """
     return _resolve_history_path(resolve_config_path(config_path))
-
 
 
 def history_manager(config_path: str = "", history_file: str = "") -> Any:
@@ -240,6 +298,27 @@ def jenkins_client(config_path: str = "") -> Iterator[Any]:
         client.close()
 
 
+def env_truthy(name: str, extra: tuple[str, ...] = ()) -> bool:
+    """判断环境变量取值是否表示"开启"
+
+    Args:
+        name: 环境变量名
+        extra: 除 TRUTHY_VALUES 之外额外认可的取值（需为小写）
+
+    Returns:
+        取值命中真值枚举时返回 True
+
+    Example:
+        >>> import os
+        >>> os.environ["JENKINS_MCP_DEMO_FLAG"] = "ON"
+        >>> env_truthy("JENKINS_MCP_DEMO_FLAG")
+        True
+        >>> del os.environ["JENKINS_MCP_DEMO_FLAG"]
+    """
+    value = os.environ.get(name, "").strip().lower()
+    return value in TRUTHY_VALUES + extra
+
+
 def write_allowed() -> bool:
     """判断是否允许执行写操作（触发构建、覆写配置）
 
@@ -255,8 +334,7 @@ def write_allowed() -> bool:
         >>> write_allowed()
         True
     """
-    value = os.environ.get(WRITE_ENV_VAR, "").strip().lower()
-    return value in ("1", "true", "yes", "on")
+    return env_truthy(WRITE_ENV_VAR)
 
 
 def write_denied_message(action: str) -> str:
@@ -287,7 +365,8 @@ def trusted_server_url() -> str:
 
     Note:
         自动探测的候选目录包含进程 CWD（EXE 模式下还排在首位），
-        而 MCP Server 的 CWD 由客户端启动参数决定。需要严格限定目标主机时，
+        而 MCP Server 的 CWD 由客户端启动参数决定。需要确定性地指定配置文件时，
+        应设置 JENKINS_MCP_CONFIG；需要严格限定目标主机时，
         应显式设置 JENKINS_MCP_ALLOWED_HOSTS——该环境变量一旦非空即为
         唯一权威来源，见 host_allowed。
 
@@ -349,7 +428,6 @@ def host_allowed(url: str) -> bool:
             allowed.add(config_host)
 
     return target in allowed
-
 
 
 def dump_json(payload: Any) -> str:
