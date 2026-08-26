@@ -16,9 +16,11 @@ CLI（cli.py / cmd_build.py / cmd_list.py）与 MCP Server（mcp/utils.py）
 在调用本模块前应用），本模块的自动探测不读取它——否则用户为 MCP 客户端导出该变量后，
 CLI 在项目目录里的 `jenkins-build` 也会静默改用那份配置。
 
-用户级目录遵循操作系统规范（Linux 走 XDG、Windows 走 %LOCALAPPDATA%），
-由 platformdirs 提供；配置落在用户级目录时，历史文件改锚到用户级数据目录，
-避免 npx 缓存目录（含版本号）升级后历史丢失。
+用户级目录三平台统一为 `~/.jenkins-config`：这个工具的主要部署方式是 npx / 单文件
+可执行程序，用户手上没有项目目录，"配置该放哪"必须一句话讲完。按平台分散到
+%LOCALAPPDATA% / ~/Library/Application Support / ~/.config 更符合系统惯例，
+但要用三行才说得清，而且配置目录与数据目录在 Windows、macOS 上重合、只在 Linux 上
+分开，反而多出一类平台差异。这里选可发现性，代价是不再尊重 XDG_CONFIG_HOME。
 """
 
 from __future__ import annotations
@@ -28,12 +30,13 @@ import os
 import sys
 from pathlib import Path
 
-from platformdirs import user_config_path, user_data_path, user_log_path
-
 logger = logging.getLogger(__name__)
 
-# 用户级目录使用的应用名（不带 appauthor，避免 Windows 下多一层作者目录）
-APP_NAME = "jenkins-config"
+# 用户级目录名（挂在家目录下，带点前缀避免污染 ls ~ 的可见输出）
+APP_DIR_NAME = ".jenkins-config"
+
+# 用户级日志子目录（相对 APP_DIR_NAME）
+LOG_DIR_NAME = "logs"
 
 # 显式指定配置文件的环境变量（仅 MCP Server 侧应用，见模块 docstring）
 CONFIG_ENV_VAR = "JENKINS_MCP_CONFIG"
@@ -51,43 +54,35 @@ HISTORY_FILE_NAME = "build_history.json"
 
 
 def user_config_dir() -> Path:
-    """获取用户级配置目录
+    """获取用户级配置目录（三平台统一）
 
     Returns:
-        ~/.config/jenkins-config（Linux）、%LOCALAPPDATA%\\jenkins-config（Windows）等；
-        注意 Windows 下与 user_data_dir() 为同一目录（platformdirs 非漫游模式）
+        ~/.jenkins-config
+
+    Raises:
+        RuntimeError: 无法确定家目录（HOME / USERPROFILE 均缺失，如容器或服务账号）
 
     Example:
         >>> user_config_dir().name
-        'jenkins-config'
+        '.jenkins-config'
     """
-    return user_config_path(APP_NAME, appauthor=False)
-
-
-def user_data_dir() -> Path:
-    """获取用户级数据目录（存放不可重建的构建历史）
-
-    Returns:
-        ~/.local/share/jenkins-config（Linux）、%LOCALAPPDATA%\\jenkins-config（Windows）等
-
-    Example:
-        >>> user_data_dir().name
-        'jenkins-config'
-    """
-    return user_data_path(APP_NAME, appauthor=False)
+    return Path.home() / APP_DIR_NAME
 
 
 def user_log_dir() -> Path:
     """获取用户级日志目录
 
     Returns:
-        ~/.local/state/jenkins-config/log（Linux）、~/Library/Logs/jenkins-config（macOS）等
+        ~/.jenkins-config/logs
+
+    Raises:
+        RuntimeError: 无法确定家目录（同 user_config_dir）
 
     Example:
         >>> user_log_dir().is_absolute()
         True
     """
-    return user_log_path(APP_NAME, appauthor=False)
+    return user_config_dir() / LOG_DIR_NAME
 
 
 def project_root() -> Path:
@@ -108,22 +103,27 @@ def search_bases() -> list[Path]:
     """
     获取配置文件探测的候选目录（按优先级排列）
 
-    末位固定为用户级配置目录：MCP Server 由客户端以 stdio 拉起，
+    末位固定为用户级配置目录 `~/.jenkins-config`：MCP Server 由客户端以 stdio 拉起，
     CWD 可能是 `/` 或用户家目录，仅靠项目根 / CWD / exe 目录探测不可靠。
+    家目录不可解析时（容器 / 服务账号）记一条 warning 并跳过该候选，
+    不让整条探测链因此报错。
 
     Returns:
         候选目录列表：源码模式为 [项目根, CWD, 用户配置目录]，
-        EXE 模式为 [CWD, exe 目录, 用户配置目录]
+        EXE 模式为 [CWD, exe 目录, 用户配置目录]；家目录不可用时末位缺省
 
     Example:
-        >>> len(search_bases())
-        3
+        >>> len(search_bases()) >= 2
+        True
     """
     if getattr(sys, "frozen", False):
         bases = [Path.cwd(), Path(sys.executable).resolve().parent]
     else:
         bases = [project_root(), Path.cwd()]
-    bases.append(user_config_dir())
+    try:
+        bases.append(user_config_dir())
+    except RuntimeError as exc:
+        logger.warning("无法确定家目录（%s），已跳过用户级配置目录候选", exc)
     return bases
 
 
@@ -246,18 +246,10 @@ def resolve_history_path(config_file: str | Path = "") -> Path:
     """
     解析构建历史文件路径
 
-    默认锚定到配置文件所在目录的 data/build_history.json；
-    但配置来自用户级配置目录时改锚到用户级数据目录——这条分支正对应
-    npx / EXE 部署（无项目目录可用）的场景，npx 缓存目录带版本号，
-    升级换目录就会丢历史。这是历史文件路径的唯一入口，CLI 与 MCP 都应通过它取值。
-
-    改锚前先探测旧路径（<配置目录>/data/build_history.json）：该文件已存在说明
-    是本次改动之前就在用的老部署，继续沿用，否则升级后历史会表现为凭空清空。
-
-    Note:
-        Windows 下 platformdirs 的配置目录与数据目录同为 %LOCALAPPDATA%\\jenkins-config，
-        因此该分支的效果是把历史从 <配置目录>/data/ 提到 <配置目录>/ 下，
-        并非真正分离到另一个目录。
+    统一锚定到配置文件所在目录的 data/build_history.json。用户级目录三平台
+    都是 `~/.jenkins-config`，配置与数据同处一地，因此不需要再按平台分流——
+    走 npx 部署时历史落在 `~/.jenkins-config/data/`，与带版本号的 npx 缓存目录
+    无关，升级不会丢。这是历史文件路径的唯一入口，CLI 与 MCP 都应通过它取值。
 
     Args:
         config_file: 配置文件路径，为空时先自动探测配置文件
@@ -271,29 +263,4 @@ def resolve_history_path(config_file: str | Path = "") -> Path:
         True
     """
     base = Path(config_file) if config_file else resolve_config_file()
-    legacy = base.parent / DATA_DIR_NAME / HISTORY_FILE_NAME
-    if _same_dir(base.parent, user_config_dir()) and not legacy.exists():
-        return user_data_dir() / HISTORY_FILE_NAME
-    return legacy
-
-
-def _same_dir(left: Path, right: Path) -> bool:
-    """判断两个目录路径是否指向同一位置（容忍未创建的目录）
-
-    Args:
-        left: 待比较路径
-        right: 待比较路径
-
-    Returns:
-        解析为绝对路径后相等时返回 True
-
-    Example:
-        >>> _same_dir(Path.cwd(), Path.cwd() / ".")
-        True
-    """
-    try:
-        return left.expanduser().resolve() == right.resolve()
-    except (OSError, RuntimeError, ValueError) as exc:
-        # RuntimeError: expanduser 在 HOME/USERPROFILE 缺失时抛出（容器 / 服务账号）
-        logger.warning("路径比较失败（%s vs %s）：%s", left, right, exc)
-        return False
+    return base.parent / DATA_DIR_NAME / HISTORY_FILE_NAME

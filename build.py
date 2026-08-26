@@ -27,14 +27,13 @@ TARGETS = {
         'hidden_imports': [
             'requests', 'questionary', 'prompt_toolkit', 'prompt_toolkit.input',
             'prompt_toolkit.output', 'prompt_toolkit.styles', 'wcwidth', 'yaml',
-            'platformdirs',
         ],
         'collect_all': [],
     },
     'mcp': {
         'name': 'jenkins-config-mcp',
         'entry': 'entry_point_mcp.py',
-        'hidden_imports': ['requests', 'yaml', 'platformdirs'],
+        'hidden_imports': ['requests', 'yaml'],
         'collect_all': [
             'mcp', 'pydantic', 'pydantic_core', 'pydantic_settings',
             'jsonschema', 'jsonschema_specifications', 'anyio', 'httpx',

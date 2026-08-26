@@ -303,10 +303,7 @@ claude mcp add jenkins-build -- uv run --directory /path/to/jenkins-config jenki
 
 npx / EXE 方式没有"项目目录"这个概念，Server 由客户端拉起时 CWD 可能是 `/` 或家目录，所以**必须让它能找到 `jenkins-config.yaml`**。两种做法：
 
-1. 放到用户级配置目录（探测链的末位，最省事）：
-   - Linux `~/.config/jenkins-config/jenkins-config.yaml`
-   - macOS `~/Library/Application Support/jenkins-config/jenkins-config.yaml`
-   - Windows `%LOCALAPPDATA%\jenkins-config\jenkins-config.yaml`
+1. 放到用户级配置目录（探测链的末位，最省事）：三平台统一为 `~/.jenkins-config/jenkins-config.yaml`（Windows 即 `%USERPROFILE%\.jenkins-config\jenkins-config.yaml`）
 2. 用 `JENKINS_MCP_CONFIG` 显式指路（**只接受绝对路径**，相对路径会记 warning 后按未设置处理）：
 
 ```json
@@ -650,15 +647,17 @@ MCP Prompts 提供预定义的交互流程模板，帮助 AI Agent 引导用户�
 
 stdout 是 JSON-RPC 通道，**日志一律走 stderr**，客户端会自行落盘（如 Claude Desktop 的 `~/Library/Logs/Claude/mcp-server-*.log`、Windows `%APPDATA%\Claude\logs\`）；只有显式设置 `JENKINS_MCP_LOG_FILE` 时才额外写文件。
 
-用户级目录由 `platformdirs` 按操作系统规范给出（`jenkins_config/paths.py` 中的 `user_config_dir()` / `user_data_dir()` / `user_log_dir()`）：
+用户级目录三平台统一为 `~/.jenkins-config`（`jenkins_config/paths.py` 中的 `user_config_dir()` / `user_log_dir()`）：
 
-- 配置：Linux `~/.config/jenkins-config/`、macOS `~/Library/Application Support/jenkins-config/`、Windows `%LOCALAPPDATA%\jenkins-config\`
-- 数据（构建历史）：Linux `~/.local/share/jenkins-config/`、Windows `%LOCALAPPDATA%\jenkins-config\`（与配置目录同一位置，见下）
-- 日志：Linux `~/.local/state/jenkins-config/log/`、macOS `~/Library/Logs/jenkins-config/`、Windows `%LOCALAPPDATA%\jenkins-config\Logs\`
+- 配置：`~/.jenkins-config/jenkins-config.yaml`
+- 数据（构建历史）：`~/.jenkins-config/data/build_history.json`
+- 日志：`~/.jenkins-config/logs/`
+
+按平台分散到 `%LOCALAPPDATA%` / `~/Library/Application Support` / `~/.config` 更合系统惯例，但要三行才说得清，而且配置目录与数据目录在 Windows、macOS 上重合、只在 Linux 上分开，反而多出一类平台差异。这里选可发现性，代价是不再尊重 `XDG_CONFIG_HOME`。
 
 配置文件解析优先级：显式参数 `config_path` → `JENKINS_MCP_CONFIG`（仅 MCP，绝对路径）→ 候选目录探测（源码模式 `项目根 → CWD → 用户配置目录`，EXE 模式 `CWD → exe 目录 → 用户配置目录`）。
 
-构建历史默认写在配置文件同级的 `data/build_history.json`；但配置来自**用户级配置目录**时改写到用户级数据目录——npx 缓存目录带版本号（`~/.cache/jenkins-config-mcp/<tag>/`），升级换目录会丢历史。注意 Windows 下 platformdirs 的配置目录与数据目录是同一个 `%LOCALAPPDATA%\jenkins-config`，因此该分支的实际效果是把历史从 `<配置目录>\data\` 提到 `<配置目录>\` 下，而非落到另一个目录。
+构建历史统一写在配置文件同级的 `data/build_history.json`。走 npx 时配置在 `~/.jenkins-config/`，历史就落在 `~/.jenkins-config/data/`，与带版本号的 npx 缓存目录（`~/.cache/jenkins-config-mcp/<tag>/`）无关，升级换目录不会丢历史。
 
 
 ---

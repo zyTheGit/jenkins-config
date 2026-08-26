@@ -511,38 +511,27 @@ def test_resolve_config_path_falls_back_to_user_config_dir(tmp_path, monkeypatch
     assert utils.resolve_config_path() == str(expected.resolve())
 
 
-def test_resolve_history_path_redirects_for_user_config_dir(tmp_path, monkeypatch):
-    """验证配置位于用户级配置目录时，历史改锚到用户级数据目录
+def test_resolve_history_path_anchors_beside_config(tmp_path):
+    """验证历史文件始终锚定在配置文件同级的 data/ 下
 
-    npx 缓存目录带版本号，升级即换目录；用户级数据目录才能跨版本保留历史。
+    用户级目录三平台统一为 `~/.jenkins-config`，配置与数据同处一地，
+    不再按平台把历史改锚到别的目录。
     """
     from jenkins_config import paths
 
-    user_config = tmp_path / "userconfig"
-    user_data = tmp_path / "userdata"
-    monkeypatch.setattr(paths, "user_config_dir", lambda: user_config)
-    monkeypatch.setattr(paths, "user_data_dir", lambda: user_data)
+    config_file = tmp_path / "userconfig" / "jenkins-config.yaml"
 
-    result = paths.resolve_history_path(str(user_config / "jenkins-config.yaml"))
+    result = paths.resolve_history_path(str(config_file))
 
-    assert result == user_data / "build_history.json"
+    assert result == tmp_path / "userconfig" / "data" / "build_history.json"
 
 
-def test_resolve_history_path_keeps_legacy_data_dir(tmp_path, monkeypatch):
-    """验证旧路径已有历史文件时继续沿用，避免升级后历史凭空清空"""
+def test_user_config_dir_is_unified_under_home():
+    """验证用户级配置目录三平台统一为 ~/.jenkins-config，日志为其子目录"""
     from jenkins_config import paths
 
-    user_config = tmp_path / "userconfig"
-    user_data = tmp_path / "userdata"
-    legacy = user_config / "data" / "build_history.json"
-    legacy.parent.mkdir(parents=True)
-    legacy.write_text("[]", encoding="utf-8")
-    monkeypatch.setattr(paths, "user_config_dir", lambda: user_config)
-    monkeypatch.setattr(paths, "user_data_dir", lambda: user_data)
-
-    result = paths.resolve_history_path(str(user_config / "jenkins-config.yaml"))
-
-    assert result == legacy
+    assert paths.user_config_dir() == Path.home() / ".jenkins-config"
+    assert paths.user_log_dir() == paths.user_config_dir() / "logs"
 
 
 def test_allowed_config_bases_drops_overly_broad_roots(tmp_path, monkeypatch):
