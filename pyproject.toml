@@ -1,6 +1,6 @@
 [project]
 name = "jenkins-config"
-version = "1.6.0"
+version = "1.6.1"
 description = "Jenkins 自动构建工具"
 requires-python = ">=3.10"
 dependencies = [
