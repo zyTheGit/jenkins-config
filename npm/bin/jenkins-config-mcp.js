@@ -32,6 +32,12 @@ const MODULE_ARGS = ['-m', 'jenkins_config.mcp.server'];
 const DEFAULT_PACKAGE =
   'jenkins-config[mcp] @ git+https://github.com/zyTheGit/jenkins-config.git';
 
+// cmd.exe 需要转义的元字符。三处转义共用一份，避免改一处漏两处
+const CMD_META = /([()\][%!^"`<>&|;, *?])/g;
+
+// 主动关停时记录信号：既用于去重（避免重复杀树），也用于区分关停与真失败
+let shutdownSignal = null;
+
 // 平台 → Release 资产名，与 .github/workflows/build.yml 的产物命名保持一致
 const ASSETS = {
   'win32-x64': 'jenkins-config-mcp-win-x64.exe',
@@ -51,6 +57,21 @@ function log(message) {
 }
 
 /**
+ * 判断路径是否指向一个存在的普通文件。
+ *
+ * @param {string} candidate 待检查路径
+ * @returns {boolean} 是文件则 true
+ */
+function isExistingFile(candidate) {
+  try {
+    return fs.statSync(candidate).isFile();
+  } catch {
+    // 不存在或不可读
+    return false;
+  }
+}
+
+/**
  * 在 PATH 中查找可执行文件（Windows 下按 PATHEXT 补全后缀）。
  *
  * 不走 shell，避免把用户参数交给命令行解析器。
@@ -60,21 +81,22 @@ function log(message) {
  */
 function which(name) {
   if (name.includes(path.sep) || name.includes('/')) {
-    return fs.existsSync(name) ? name : null;
+    return isExistingFile(name) ? name : null;
   }
-  const exts =
-    process.platform === 'win32'
-      ? (process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
-      : [''];
+  let exts = [''];
+  if (process.platform === 'win32') {
+    exts = (process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean);
+    // 名字已自带 PATHEXT 后缀时（jenkins-config-mcp.cmd）要先按原名找，
+    // 否则只会去试 xxx.cmd.EXE 这类不存在的组合，明明在 PATH 上却找不到
+    if (exts.some((ext) => name.toLowerCase().endsWith(ext.toLowerCase()))) {
+      exts = [''].concat(exts);
+    }
+  }
   for (const dir of (process.env.PATH || '').split(path.delimiter)) {
     if (!dir) continue;
     for (const ext of exts) {
       const candidate = path.join(dir, name + ext);
-      try {
-        if (fs.statSync(candidate).isFile()) return candidate;
-      } catch {
-        // 不存在或不可读，继续尝试下一个候选
-      }
+      if (isExistingFile(candidate)) return candidate;
     }
   }
   return null;
@@ -104,7 +126,7 @@ function isBatchScript(command) {
  * @returns {string} 转义后的命令
  */
 function escapeCmdCommand(value) {
-  return String(value).replace(/([()\][%!^"`<>&|;, *?])/g, '^$1');
+  return String(value).replace(CMD_META, '^$1');
 }
 
 /**
@@ -122,9 +144,7 @@ function escapeCmdArgument(value) {
   arg = arg.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"');
   arg = arg.replace(/(?=(\\+?)?)\1$/, '$1$1');
   arg = `"${arg}"`;
-  return arg
-    .replace(/([()\][%!^"`<>&|;, *?])/g, '^$1')
-    .replace(/([()\][%!^"`<>&|;, *?])/g, '^$1');
+  return arg.replace(CMD_META, '^$1').replace(CMD_META, '^$1');
 }
 
 /**
@@ -141,6 +161,48 @@ function escapeCmdArgument(value) {
 function wrapForCmd(command, args) {
   const line = [escapeCmdCommand(command)].concat(args.map(escapeCmdArgument)).join(' ');
   return { command: process.env.COMSPEC || 'cmd.exe', args: ['/d', '/s', '/c', `"${line}"`] };
+}
+
+/**
+ * 终止子进程（经 cmd.exe 转发时连同整棵进程树）。
+ *
+ * 走 cmd.exe 时 child 只是 cmd.exe 本身，真正的 MCP Server 是它的子进程。
+ * Windows 没有进程组信号，单杀 cmd.exe 会留下孤儿进程继续持有继承来的
+ * stdin/stdout，客户端会一直等一个没人回应的管道，只能用 taskkill /T 杀树。
+ *
+ * 只执行一次：taskkill 路径不会置位 child.killed，重复信号会拿着可能已被
+ * 复用的 PID 再杀一遍。
+ *
+ * @param {import('node:child_process').ChildProcess} child 子进程
+ * @param {string} sig 收到的信号名
+ * @param {boolean} viaCmd 是否经 cmd.exe 转发
+ */
+function terminate(child, sig, viaCmd) {
+  if (shutdownSignal) return;
+  shutdownSignal = sig;
+
+  if (viaCmd && child.pid) {
+    try {
+      const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      // taskkill 不在 PATH 上（精简镜像）时退回单进程 kill，至少别静默什么都不做
+      killer.on('error', () => child.kill(sig));
+      // taskkill 起来了却没干成（拒绝访问、被安全软件拦截）同样要退回，
+      // 否则进程树存活而这里既无日志也无动作 —— child.kill 对已退出进程是空操作
+      killer.on('exit', (code) => {
+        if (code !== 0 && !child.killed) {
+          log(`taskkill 失败（退出码 ${code}），退回单进程 kill`);
+          child.kill(sig);
+        }
+      });
+      return;
+    } catch {
+      // spawn 同步抛错，同样退回单进程 kill
+    }
+  }
+  child.kill(sig);
 }
 
 /**
@@ -362,6 +424,15 @@ async function main() {
     return;
   }
 
+  // 经 cmd.exe 转发后，脚本不存在只会让 cmd 自己报错并返回 1，spawn 的
+  // 'error' 事件不再触发，所以这里先自己判一次，保证仍有一行归因日志。
+  // 用 which() 判定而不是直接 existsSync：命令可能是裸名（如
+  // JENKINS_MCP_BINARY=foo.cmd），那种情况 cmd.exe 会按 PATH 找，不能按 CWD 否掉
+  if (viaCmd && !which(resolved.command)) {
+    log(`启动失败 (${resolved.command}): 文件不存在`);
+    process.exit(1);
+  }
+
   const child = spawn(launch.command, launch.args, {
     stdio: 'inherit',
     shell: false,
@@ -370,18 +441,31 @@ async function main() {
   });
 
   child.on('error', (err) => {
-    log(`启动失败 (${resolved.command}): ${err.message}`);
+    // 转发时 spawn 的对象是 cmd.exe，两个路径都打出来才能区分是 COMSPEC 还是 shim 的问题
+    log(`启动失败 (${launch.command}${viaCmd ? ` → ${resolved.command}` : ''}): ${err.message}`);
     process.exit(1);
   });
 
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.on(sig, () => {
-      if (!child.killed) child.kill(sig);
+      if (!child.killed) terminate(child, sig, viaCmd);
     });
   }
 
   child.on('exit', (code, signal) => {
+    // 主动关停：taskkill /F 会让 cmd.exe 带非零码退出，不能报成失败。
+    // 重新抛信号前先摘掉自己的 listener，否则被自己接住，进程反而退不掉
+    if (shutdownSignal) {
+      process.removeAllListeners(shutdownSignal);
+      if (process.platform === 'win32') {
+        // Windows 没有真正的信号投递，process.kill 自己等于 TerminateProcess
+        process.exit(0);
+      }
+      process.kill(process.pid, shutdownSignal);
+      return;
+    }
     if (signal) {
+      process.removeAllListeners(signal);
       process.kill(process.pid, signal);
       return;
     }
