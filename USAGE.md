@@ -177,7 +177,9 @@ cd jenkins-config
 
 ## 🤖 MCP Server（AI Agent 集成）
 
-构建能力也可通过 MCP Server 提供给 AI Agent（Claude Desktop、Cursor 等）调用，包含 11 个工具（环境/项目/配置查询、构建触发、状态与日志查询、历史统计、重建上次构建）。
+构建能力也可通过 MCP Server 提供给 AI Agent（Claude Desktop、Cursor 等）调用，包含 14 个工具（环境/项目/配置查询、构建触发、状态与日志查询、历史统计、重建上次构建，以及三个排障工具）。
+
+其中三个排障工具：`where_config` 只查路径不读内容，回答配置是从哪个目录探测出来的；`doctor` 默认零网络请求，一次列出配置定位、可读、可解析、写权限、日志落点等本地体检项；`init_config` 在用户级目录 `~/.jenkins-config` 生成配置模板，凭据保持占位符待手填。
 
 ```bash
 # 安装 MCP 可选依赖并启动（stdio 传输）

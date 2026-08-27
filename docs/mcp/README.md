@@ -12,10 +12,14 @@ Jenkins MCP Server 将 Jenkins 自动构建 CLI 工具的能力暴露为 [Model 
 - 查看构建历史与统计
 - 重建上次构建的项目
 - 诊断构建失败原因
+- 诊断配置来源（`where_config`）与本地环境体检（`doctor`，默认不发网络请求）
+- 零配置起步：生成配置模板（`init_config`）
 
-**能力清单：** 11 个 Tools（8 个只读查询类 + 3 个操作类）、4 个 Resources、2 个 Prompts。
+**能力清单：** 14 个 Tools（10 个只读查询类 + 4 个写入类）、4 个 Resources、3 个 Prompts。
 
-**默认只读：** 三个操作类工具（`trigger_build`、`rebuild_last`、`save_config`）需显式设置环境变量 `JENKINS_MCP_ALLOW_WRITE=1` 才会执行，详见 §7.3。
+**默认只读：** 三个操作类工具（`trigger_build`、`rebuild_last`、`save_config`）需显式设置环境变量 `JENKINS_MCP_ALLOW_WRITE=1` 才会执行，详见 §7.3。第四个写入类工具 `init_config` 采用**分级门控**：只在覆盖已有配置（`overwrite=true`）时才要求该变量，详见 §4.2。
+
+**失败可行动：** 所有工具的失败返回都带统一载荷（`error_code` / `error` / `config_path` / `next_steps` / `docs`），错误码枚举与各码的下一步动作见 §7.5。
 
 ---
 
@@ -24,7 +28,7 @@ Jenkins MCP Server 将 Jenkins 自动构建 CLI 工具的能力暴露为 [Model 
 - **Python 3.10+** 和 [uv](https://docs.astral.sh/uv/) 包管理器（仅源码 / 控制台入口方式需要；走 §3.2 的 npx 方式时不需要）
 - **mcp 可选依赖**：`mcp[cli]>=1.25.0,<2.0.0`（pyproject.toml 中的 `mcp` extra，安装方式见 §3.5）
 - **Node.js 18+**（仅 §3.2 的 npx 方式需要，此时无需 Python）
-- **配置文件**：探测链上任一目录中存在 `jenkins-config.yaml` / `jenkins-config.yml` / `jenkins-config.json`——源码模式为项目根 → CWD → 用户级配置目录，EXE 模式为 CWD → exe 目录 → 用户级配置目录；也可用 `JENKINS_MCP_CONFIG` 给绝对路径（放置建议见 §3.7，完整规则见 §7.1）
+- **配置文件**：探测链上任一目录中存在 `jenkins-config.yaml` / `jenkins-config.yml` / `jenkins-config.json`——源码模式为项目根 → CWD → 用户级配置目录，EXE 模式为 CWD → exe 目录 → 用户级配置目录；也可用 `JENKINS_MCP_CONFIG` 给绝对路径（放置建议见 §3.7，完整规则见 §7.1）。没有配置文件时可直接调 `init_config` 生成模板（见 §3.9）
 - **Jenkins 服务器可达**：MCP Server 需要能够访问配置中的 Jenkins 实例
 
 ---
@@ -41,7 +45,7 @@ Jenkins MCP Server 将 Jenkins 自动构建 CLI 工具的能力暴露为 [Model 
 
 无论哪种方式，**接入客户端的动作都是同一件事**：在客户端的 MCP 配置里登记一个 stdio server，给出 `command` / `args`，需要时再给 `env`。各客户端的配置位置与登记方式见 §3.4。
 
-装完务必按 §3.6 验证一遍——MCP 客户端对"配置写错位置"通常不报错，只是列表里没有这个 server，看起来和"装了但不工作"一模一样。
+装完务必按 §3.8 验证一遍——MCP 客户端对"配置写错位置"通常不报错，只是列表里没有这个 server，看起来和"装了但不工作"一模一样。
 
 ### 3.2 通过 npx 一键运行（推荐给使用方，无需 Python）
 
@@ -163,7 +167,7 @@ claude mcp get jenkins-build
 claude mcp remove jenkins-build
 ```
 
-改完配置**必须重开 Claude Code**：MCP 配置只在启动时读取，不热加载。重开后 `/mcp` 里应出现 `jenkins-build` 及其 11 个工具。
+改完配置**必须重开 Claude Code**：MCP 配置只在启动时读取，不热加载。重开后 `/mcp` 里应出现 `jenkins-build` 及其 14 个工具。
 
 排查顺序也建议照此：先 `claude mcp list` 确认登记成功（没登记 → 配置写错了地方），再看 `/mcp` 确认当前会话已加载（登记了但列表里没有 → 没重启）。
 
@@ -338,16 +342,44 @@ claude mcp list
 ```
 
 3. 重启客户端，确认工具列表里有 `jenkins-build`（Claude Code 用 `/mcp`）。
-4. 调 `list_environments` — 通了说明配置文件找到了。
-5. 调 `health_check` — 这是唯一能证明 Jenkins 地址与 token 都有效的工具，返回 `reachable: true` 才算真正可用。
-6. 需要写操作时再调 `trigger_build`；若返回「已禁止写操作」，说明 `JENKINS_MCP_ALLOW_WRITE` 没送达，回到 §3.3。
+4. 调 `doctor` — 一次性看到配置有没有找到、有没有填完、写开关状态；默认不发网络请求，断网也能用。
+5. 调 `list_environments` — 通了说明配置文件找到了。
+6. 调 `health_check` — 这是唯一能证明 Jenkins 地址与 token 都有效的工具，返回 `reachable: true` 才算真正可用。
+7. 需要写操作时再调 `trigger_build`；若返回 `error_code: write_not_allowed`，说明 `JENKINS_MCP_ALLOW_WRITE` 没送达，回到 §3.3。
+
+任何一步失败时，返回体里的 `error_code` 与 `next_steps` 就是下一步动作，字段含义见 §7.5。
+
+### 3.9 零配置上手流程（npx 用户最短路径）
+
+npx 用户装完之后没有任何配置文件，从零到 `list_environments` 成功的最短路径是四步。让 AI 客户端直接套用 `setup_workflow` prompt（见 §6）即可，手动执行则是：
+
+1. 调 `doctor` — 若 `config_located` 为 `error`，说明探测链上没有配置文件（这是全新安装的正常状态）。
+2. 调 `init_config`（默认 `target="user"`）— 在 `~/.jenkins-config/jenkins-config.yaml` 生成模板。目标不存在时**不需要** `JENKINS_MCP_ALLOW_WRITE`，所以不必先改 `mcp.json` 再重启客户端。返回 `error_code: config_exists` 表示已有配置，不要覆盖，改去第 3 步直接编辑它。
+3. 打开返回的 `path`，把 `server.url`、`server.token` 从占位符（`http://your-jenkins-server:8080` / `your-api-token`）改成真实取值，并按 `template_fields` 中 `required=true` 的键补齐 `environments` 下的环境与项目。token 属于凭据，只能由用户本人填写。
+4. 调 `list_environments` 验证 — 能列出真实环境即生效；仍失败就按返回体的 `error_code` / `next_steps` 处理，或再调一次 `doctor` 看卡在哪一层。
+
+需要 AI 代为触发构建时，再按 §3.3 注入 `JENKINS_MCP_ALLOW_WRITE=1` 并重启客户端。
+
+> ⚠️ **路径会进入模型上下文**：`where_config` 与 `doctor` 的返回体包含配置文件、历史文件、日志目录的**绝对路径**，在 Windows / macOS 上通常含系统用户名（如 `C:\Users\<用户名>\.jenkins-config\...`）。这些内容会随工具返回进入模型上下文，介意时不要在公共会话里调用，或改用 `JENKINS_MCP_CONFIG` 把配置放到不含个人信息的路径下。两个工具都只报路径与状态，不回显 `server.token` 等凭据原文（`doctor` 只说"已配置 / 未配置"）。
 
 ---
 
 ## 4. 可用工具列表
 
-共 11 个工具：8 个只读查询类 + 3 个操作类（`trigger_build`、`rebuild_last`、`save_config`）。
+共 14 个工具：10 个只读查询类 + 4 个写入类（`trigger_build`、`rebuild_last`、`save_config`、`init_config`）。
 所有工具的 `config_path` 参数均可省略，省略时按 §7.1 的规则自动探测配置文件。
+
+选哪个工具的边界：
+
+- `show_config` 答"配置里写了什么"（内容摘要，token 脱敏）；`where_config` 答"这份配置从哪来"（路径、来源、候选目录顺序），两者字段刻意不重叠
+- `health_check` 是单点网络探测（Jenkins 通不通）；`doctor` 是本地环境体检（配置 / 权限 / 历史 / 日志 / 运行模式），默认零网络请求
+
+失败返回统一带 `error_code` / `error` / `config_path` / `next_steps` / `docs`（见 §7.5）：
+
+- dict 型工具把五个字段合并到**顶层**（`health_check` 另保留既有的 `reachable` / `url`）
+- list 型工具（`list_environments` / `list_projects` / `show_history`）返回**单元素列表**，该元素只含上述五个键，不再伪装成业务数据
+- `trigger_build` / `rebuild_last` 保持 `triggered` / `failed` 容器结构，四个可行动字段追加在顶层
+
 
 ### 4.1 只读查询类
 
@@ -359,7 +391,7 @@ claude mcp list
 |------|------|------|------|
 | `config_path` | `str` | 否 | 配置文件路径，为空时自动检测 |
 
-**返回值：** `list[dict]` — 环境信息列表，每项包含 `name`（环境名称）和 `description`（描述）。加载配置失败时返回 `[{"name": "error", "description": "加载配置失败: ..."}]`。
+**返回值：** `list[dict[str, Any]]` — 环境信息列表，每项包含 `name`（环境名称）和 `description`（描述）。加载配置失败时返回**单元素列表**，该元素为统一失败载荷（只含 `error_code` / `error` / `config_path` / `next_steps` / `docs`，不含 `name` / `description`）。
 
 ---
 
@@ -372,7 +404,7 @@ claude mcp list
 | `env` | `str` | 否 | 环境名称，为空时列出所有环境的项目 |
 | `config_path` | `str` | 否 | 配置文件路径，为空时自动检测 |
 
-**返回值：** `list[dict]` — 项目列表，每项包含 `environment`（环境名）、`name`（项目名）和 `path`（Job 路径）。
+**返回值：** `list[dict[str, Any]]` — 项目列表，每项包含 `environment`（环境名）、`name`（项目名）和 `path`（Job 路径）。加载配置失败时返回单元素列表，该元素为统一失败载荷（不含 `environment` / `name` / `path`）。
 
 ---
 
@@ -384,7 +416,7 @@ claude mcp list
 |------|------|------|------|
 | `config_path` | `str` | 否 | 配置文件路径，为空时自动检测 |
 
-**返回值：** `dict` — 包含 `server_url`、`username`、`token`（完全脱敏）、`environments` 和 `build_config`（含 `mode`、`poll_interval`、`queue_timeout`、`build_timeout`、`curl_timeout`、`max_parallel`、`log_dir`、`log_retention_days`）。
+**返回值：** `dict` — 包含 `server_url`、`username`、`token`（完全脱敏）、`environments` 和 `build_config`（含 `mode`、`poll_interval`、`queue_timeout`、`build_timeout`、`curl_timeout`、`max_parallel`、`log_dir`、`log_retention_days`）。加载失败时返回统一失败载荷（顶层五字段）。
 
 ---
 
@@ -396,7 +428,7 @@ claude mcp list
 |------|------|------|------|
 | `config_path` | `str` | 否 | 配置文件路径，为空时自动检测 |
 
-**返回值：** `dict` — 包含 `reachable`（是否可达）和 `url`（服务器地址），失败时附加 `error` 字段。
+**返回值：** `dict` — 包含 `reachable`（是否可达）和 `url`（服务器地址）；失败时在这两个键之外合并统一失败载荷（`error_code` / `error` / `config_path` / `next_steps` / `docs`）。连接失败（`ConnectionError`）归为 `unknown_error`，`next_steps` 指向"调 `doctor` 复查配置 / 确认地址可达 / 确认 token 未过期"——网络失败不会被误判成配置权限问题。
 
 ---
 
@@ -410,7 +442,7 @@ claude mcp list
 | `limit` | `int` | 否 | 返回的最大记录数量，默认 `20` |
 | `config_path` | `str` | 否 | 配置文件路径，为空时自动检测 |
 
-**返回值：** `list[dict]` — BuildRecord 字典列表。历史文件锚定在配置文件所在目录的 `data/build_history.json`。
+**返回值：** `list[dict[str, Any]]` — BuildRecord 字典列表。历史文件锚定在配置文件所在目录的 `data/build_history.json`。读取失败时返回单元素列表，该元素为统一失败载荷（只含五个键，不再塞 `path` 之类的伪记录字段）。
 
 ---
 
@@ -422,7 +454,7 @@ claude mcp list
 |------|------|------|------|
 | `config_path` | `str` | 否 | 配置文件路径，为空时自动检测 |
 
-**返回值：** `dict` — 包含 `total`（总数）、`success`（成功数）、`failure`（失败数）、`building`（未落终态的 `BUILDING` 占位记录数）、`other`（`ABORTED` / `CANCELLED` 等既不算成功也不算失败的终态数）和 `success_rate`（成功率，格式化为百分比字符串，如 `"95.0%"`）。`building` 与 `other` 都**不参与成功率分母**（分母恒为 `success + failure`）；分母为 0 时成功率为 `"0%"`。
+**返回值：** `dict` — 包含 `total`（总数）、`success`（成功数）、`failure`（失败数）、`building`（未落终态的 `BUILDING` 占位记录数）、`other`（`ABORTED` / `CANCELLED` 等既不算成功也不算失败的终态数）和 `success_rate`（成功率，格式化为百分比字符串，如 `"95.0%"`）。`building` 与 `other` 都**不参与成功率分母**（分母恒为 `success + failure`）；分母为 0 时成功率为 `"0%"`。查询失败时返回统一失败载荷（顶层五字段）。
 
 
 ---
@@ -458,7 +490,74 @@ claude mcp list
 
 ---
 
-### 4.2 操作类
+#### `where_config`
+
+诊断配置文件的锚定结果，回答"这次到底读的是哪份配置、为什么是它"。**只做路径层面的探测，全程不加载配置内容**，因此返回体不可能出现 `server.url` / `token` 等字段。
+
+参数：
+
+- `config_path`（`str`，否）— 显式指定的配置文件路径，为空时按环境变量 / 自动探测
+
+**返回值：** `dict`
+
+- `config_path` — 本次会读取的配置文件绝对路径
+- `path_allowed` — 该路径是否落在 `allowed_config_bases` 之内
+- `exists` — 该文件是否存在（**仅当 `path_allowed=true` 时才返回该键**）
+- `source` — 路径来源：`explicit_arg`（显式传参）/ `env_var`（`JENKINS_MCP_CONFIG` 生效）/ `probed`（候选目录命中）/ `fallback`（都没命中，退回首个候选）
+- `env_var` — `{name, value, effective}`：变量名恒为 `JENKINS_MCP_CONFIG`，`effective` 说明它这次是否真正生效（传了相对路径或同时给了 `config_path` 时为 `false`）
+- `mode` — 运行模式 `source` / `frozen`
+- `search_bases` — 候选目录明细，每项含 `base`（被跳过时为 `null`）、`order`（从 1 递增）、`kind`（`project_root` / `cwd` / `exe_dir` / `user_config_dir`）、`exists`、`matched_file`（命中的配置文件，未命中为空串）、`skipped_reason`（`''` / `home_unavailable` / `too_broad`）、`allowed`（是否在白名单允许范围内）
+- `candidate_file_names` — 探测用的文件名顺序
+- `history_path` — 对应的构建历史文件路径（**仅当 `path_allowed=true` 时才返回该键**）
+- `allowed_config_bases` — 当前允许读写配置的根目录列表（即 `config_path` 白名单）
+
+传入的 `config_path` 越界时（`path_allowed=false`），返回体**省略 `exists` 与 `history_path`**，改带 §7.5 的失败载荷字段（`error_code=config_path_denied` + `next_steps`）。这样做是为了不让本 tool 变成"任意路径存在性探针"绕过白名单——诊断需要的是"为什么被拒、怎么放行"，而不是它在不在那儿；`search_bases` / `allowed_config_bases` 等诊断信息照常返回。
+
+探测本身失败时返回 §7.5 的失败载荷（`error_code=unknown_error` + 非空 `next_steps`），而不是只带 `error` 的字典——没有 `error_code` 的返回体无法被机械判错，也拿不到下一步动作。
+
+
+> `search_bases` / `allowed_config_bases` 里都是绝对路径，通常含系统用户名，会随返回值进入模型上下文，见 §3.9 的提示。
+
+---
+
+#### `doctor`
+
+本地环境体检：一次性把配置、写开关、主机白名单、历史文件、日志落点、运行模式摊开成固定 11 项检查。**默认零网络请求**，断网或凭据未配好时同样可用；凭据只以"键名 + 已配置 / 未配置"呈现，不含 token 原文。
+
+参数：
+
+- `config_path`（`str`，否）— 配置文件路径，为空时自动探测
+- `include_jenkins`（`bool`，否）— 默认 `false`；为 `true` 时才追加一次 Jenkins 连通性检测（会发网络请求）
+
+**返回值：** `dict`
+
+- `status` — 整体结论 `ok` / `warn` / `error`（取所有参与项中最严重者）
+- `checks` — 11 项检查，每项含 `name` / `status`（`ok` / `warn` / `error` / `skip`）/ `detail` / `hint`（`ok` 时为空串）
+- `summary` — 各状态计数 `{ok, warn, error, skip}`
+- `config_path` — 本次体检针对的配置文件路径
+- `next_steps` — 汇总自失败项的 `hint`（error 优先于 warn）；`status` 为 `ok` 时为空列表
+
+11 个检查项：
+
+- `config_located` — 配置文件是否命中（`source` 为 `fallback` 或文件不存在即 error）
+- `config_readable` — 文件可读性（区分"是目录"与"没权限"）
+- `config_parsable` — 能否解析并构造出 `Config`
+- `config_complete` — `server.url` / `server.token` 是否仍是模板占位符（判据与模板同源，见 `config_io.PLACEHOLDER_VALUES`）
+- `config_path_allowed` — 路径是否在白名单允许范围内
+- `write_gate` — `JENKINS_MCP_ALLOW_WRITE` 状态
+- `allowed_hosts` — `JENKINS_MCP_ALLOWED_HOSTS` 是否显式设置
+- `history_path` — 历史文件可读 / 目录可写（**只读探测，绝不创建目录**；文件尚不存在但目录可写判 ok，全新安装不算故障）
+- `log_sink` — 当前日志级别与实际落点（请求了文件日志但降级为仅 stderr 时判 warn）
+- `runtime_mode` — 运行模式、包版本、进程 CWD，**恒为 ok 且不参与整体 status 升级**
+- `jenkins_reachable` — 默认 `skip`；`include_jenkins=true` 时才真正探测
+
+判级约定：`write_gate` 与 `allowed_hosts` 未设置**只判 warn**，因为只读模式与"退回配置文件 `server.url`"都是有意的默认值；warn 不会把整体拉成 error，避免 doctor 在正常只读部署下常态报红。配置类检查一旦某层失败，其下游一律记 `skip` 而不是重复报 error。
+
+> `detail` 里含配置、历史、日志的绝对路径（通常含系统用户名），同样会进入模型上下文，见 §3.9。
+
+---
+
+### 4.2 写入类
 
 #### `trigger_build`
 
@@ -483,6 +582,7 @@ claude mcp list
 - `failed` 每项包含 `job_key` 和 `error`
 - `skipped_params`（可选）：`params` 中被跳过的非标量参数名列表
 - `history_error`（可选）：构建已触发但历史记录写入失败时的错误信息（不影响构建本身）
+- 整体失败（未开写门控、环境名为空、配置加载失败等）时容器结构不变（`triggered` 为空、`failed` 带一条人类可读 `error`），并在**顶层追加** `error_code` / `config_path` / `next_steps` / `docs`；顶层 `error` 与 `failed[0]["error"]` 同源
 
 > ⚠️ **BUILDING 占位记录说明**：MCP 触发的构建在历史记录中以 `BUILDING` 占位状态写入，**不会自动更新为终态**。查询真实构建状态请使用 `get_build_status` 工具；因此 `--history` / `--history-stats`（及 `show_history` / `show_history_stats`）中的显示可能不准确（占位记录可能被统计为失败并稀释成功率）。返回结果的每个触发项均带 `note` 字段提示该行为。
 
@@ -515,7 +615,7 @@ claude mcp list
 | `jenkins_username` | `str` | 否 | Jenkins 用户名（直连模式，默认 `admin`） |
 | `history_file` | `str` | 否 | 历史文件路径（直连模式，默认为项目根目录下的 `data/build_history.json`） |
 
-**返回值：** `dict` — 格式同 `trigger_build`（`triggered` / `failed` 两个列表）。
+**返回值：** `dict` — 格式同 `trigger_build`（`triggered` / `failed` 两个列表，整体失败时顶层追加 `error_code` / `config_path` / `next_steps` / `docs`）。
 
 ---
 
@@ -537,7 +637,37 @@ claude mcp list
 |------|------|------|------|
 | `config_path` | `str` | 否 | 配置文件路径，为空时自动检测 |
 
-**返回值：** `dict` — 成功时包含 `message`（`配置已保存`）、`path`（文件路径）和 `backup`（备份路径，原文件不存在时为空字符串），失败时包含 `error`（错误信息）。
+**返回值：** `dict` — 成功时包含 `message`（`配置已保存`）、`path`（文件路径）和 `backup`（备份路径，原文件不存在时为空字符串；`.bak` 已存在时退化为 `<名字>.<时间戳>.bak`，与 `init_config` 共用 `backup_config_file()`）；失败时返回统一失败载荷（顶层 `error_code` / `error` / `config_path` / `next_steps` / `docs`），未开写门控为 `write_not_allowed`、非 YAML 路径为 `invalid_target`。
+
+---
+
+#### `init_config`
+
+在用户级目录或当前工作目录生成配置模板，供"什么都没配"的场景起步（零配置流程见 §3.9）。模板中的 `server.url` / `server.token` **恒为占位符**，绝不从环境变量或其它配置文件推断真实凭据。
+
+参数：
+
+- `target`（`str`，否）— 写入位置，默认 `user`。**只接受 `user` / `cwd` 两个枚举值，不接受任意路径**：路径参数由调用方可控，等于把"往哪写文件"的决定权交出去
+  - `user` → `~/.jenkins-config/jenkins-config.yaml`
+  - `cwd` → MCP Server 进程当前工作目录下的 `jenkins-config.yaml`
+- `overwrite`（`bool`，否）— 默认 `false`；为 `true` 时允许覆盖已存在的配置（需先开写门控）
+- `format`（`str`，否）— 模板格式，本版本仅支持 `yaml`。取值在**任何写入之前**校验（忽略大小写与首尾空格），非法取值直接返回 `invalid_target` 且不落任何文件——否则 `format='json'` 会把 JSON 内容写进 `jenkins-config.yaml`
+
+
+**分级写门控**（与其它写类工具不同，务必看清）：
+
+- 目标文件不存在 + `overwrite=false`（默认）→ **直接创建，不需要** `JENKINS_MCP_ALLOW_WRITE`。门控保护的是既有资产，而这里的目标尚不存在；强制门控会让零配置用户从 1 步变 3 步（改 `mcp.json` → 重启客户端 → 再调用），最短上手路径直接失效
+- 目标文件已存在 + `overwrite=false` → 一律返回 `error_code: config_exists` 且**不做任何改动**，与门控状态无关。默认调用永远不可能损坏已有配置
+- `overwrite=true` → 视为改动既有资产，**必须** `JENKINS_MCP_ALLOW_WRITE=1`，否则返回 `write_not_allowed`。放行后在**同一个** `file_lock(required=True)` 临界区内依次完成"复查目标是否存在 → 复制为 `.bak` → `atomic_write` 落盘"（与 `save_config` 共用 `backup_config_file()`，避免 CLI 与 MCP 并发写互相截断）。`.bak` 已被占用时退化为 `<名字>.<时间戳>.bak`：固定名意味着第二次覆写会把上一份备份也换成模板，而配置里往往就是唯一一份可用凭据
+
+- `target='cwd'` 但该目录过宽（盘符 / 文件系统根，或家目录本身）→ 返回 `config_path_denied`，并给出两条出路：改用 `target='user'`，或把该目录追加到 `JENKINS_MCP_CONFIG_ROOTS`
+
+**返回值：** `dict`
+
+- 成功：`created: true`、`path`（绝对路径）、`format`、`backup`（未覆盖时为空串）、`template_fields`（字段清单，每项含 `key` / `description` / `required`，与 CLI 的 `--init` 说明同源）、`next_steps`（填字段 → 调 `doctor` → 调 `list_environments`）
+- 失败：`created: false`、`path`，以及统一失败载荷的五个字段。可能的错误码为 `invalid_target`（`target` / `format` 非法）、`home_unavailable`（`target='user'` 但 HOME / USERPROFILE 缺失）、`config_path_denied`、`config_exists`、`write_not_allowed`、`config_permission_denied`（目录不可写 / 锁等待超时）
+
+生成后必须由用户本人把 `server.url`、`server.token` 改为真实取值——token 属于凭据，不应由客户端代填或猜测。
 
 ---
 
@@ -556,6 +686,8 @@ MCP Resources 提供只读数据端点，客户端可通过 URI 直接访问配�
 所有 Resource 的读取异常都会被捕获，以 JSON `{"error": "..."}` 返回，不会向客户端抛出原始异常；只读访问不会创建历史文件或目录。
 
 历史类资源的路径与 `show_history` 工具一致：锚定到配置文件所在目录的 `data/build_history.json`。
+
+Resources 仍为 4 个，**没有** `config://location` 之类的"配置来源"资源：它的字段会与 `where_config` 完全重叠，而 Resource 的 URI 模板无法传 `config_path`（只能报自动探测的结果），两处并存必然随时间漂移。查配置来源统一用 `where_config`。
 
 ---
 
@@ -587,6 +719,16 @@ MCP Prompts 提供预定义的交互流程模板，帮助 AI Agent 引导用户�
 2. 具体的错误信息和位置
 3. 可能的修复方案
 4. 预防措施
+
+### `setup_workflow`
+
+引导用户从零完成本地配置直到 `list_environments` 成功的交互流程（无参数），五步：
+
+1. 调 `doctor` 做本地体检，确认卡在哪一层（配置是否存在、是否填完、写开关状态）
+2. 调 `where_config` 查看候选目录顺序与本次会读到的路径
+3. 配置文件不存在时调 `init_config` 生成模板（默认写入 `~/.jenkins-config`，需要放当前工作目录时传 `target='cwd'`）；返回 `config_exists` 说明已有配置，不要覆盖，回到第 2 步确认路径
+4. **由用户本人**打开返回的 `path`，把 `server.url` / `server.token` 从占位符改成真实取值，并按 `template_fields` 中 `required` 的字段补齐 `environments`——这一步刻意停下来等人，token 属于凭据，不代填也不猜测
+5. 调 `list_environments` 验证；仍失败则按返回体的 `error_code` / `next_steps` 继续处理
 
 ---
 
@@ -632,7 +774,7 @@ MCP Prompts 提供预定义的交互流程模板，帮助 AI Agent 引导用户�
 
 | 环境变量 | 默认 | 说明 |
 |----------|------|------|
-| `JENKINS_MCP_ALLOW_WRITE` | 未设置（只读） | 设为 `1`/`true`/`yes`/`on` 才允许写操作（`trigger_build`、`rebuild_last`、`save_config`）；未设置时这些工具直接返回拒绝信息，其余只读工具不受影响 |
+| `JENKINS_MCP_ALLOW_WRITE` | 未设置（只读） | 设为 `1`/`true`/`yes`/`on` 才允许写操作（`trigger_build`、`rebuild_last`、`save_config`）；未设置时这些工具直接返回 `write_not_allowed` 载荷，其余只读工具不受影响。`init_config` 为分级门控：仅在 `overwrite=true`（覆盖已有配置）时要求该变量，创建新文件不要求（见 §4.2） |
 | `JENKINS_MCP_ALLOWED_HOSTS` | 未设置 | 逗号分隔的主机白名单，用于放行 `rebuild_last` 直连模式的 `jenkins_url`。**一旦设置即为唯一权威来源**，不再叠加配置文件中的主机（否则客户端只要在自己的 CWD 放一份 `jenkins-config.yaml` 就能扩大白名单）；未设置时退回**自动探测到的**配置文件中 `server.url` 的同一 host（不采用调用方传入的 `config_path`）；两者都取不到时任何 `jenkins_url` 都会被拒绝 |
 | `JENKINS_MCP_CONFIG` | 未设置 | 直接指定配置文件路径，**优先于探测规则，且只对 MCP Server 生效**（CLI 的自动探测不读它，避免为客户端导出该变量后连 `jenkins-build` 的行为一起改掉）。**只接受绝对路径**：相对值仍受 CWD 影响，会记一条 warning 后按未设置处理。该变量由部署方设定，属可信来源，其指向的**那一个文件**自动放行；父目录不整树进入白名单 |
 | `JENKINS_MCP_CONFIG_ROOTS` | 未设置 | `os.pathsep` 分隔的目录白名单，用于扩展允许读写的配置文件根目录。默认只允许 `paths.search_bases()`（项目根 / CWD / exe 目录 / 用户级配置目录）之内的路径；调用方传入的 `config_path` 解析后若落在白名单之外，直接抛 `PermissionError`，避免用自带配置绕过主机白名单或让 `save_config` 覆写任意 YAML |
@@ -659,6 +801,34 @@ stdout 是 JSON-RPC 通道，**日志一律走 stderr**，客户端会自行落�
 
 构建历史统一写在配置文件同级的 `data/build_history.json`。走 npx 时配置在 `~/.jenkins-config/`，历史就落在 `~/.jenkins-config/data/`，与带版本号的 npx 缓存目录（`~/.cache/jenkins-config-mcp/<tag>/`）无关，升级换目录不会丢历史。
 
+### 7.5 统一失败载荷与错误码
+
+所有工具的失败返回都带同一组字段（定义在 `jenkins_config/mcp/errors.py`）：
+
+- `error_code` — 闭集错误码（见下），供客户端做分支判断
+- `error` — 人类可读的错误描述
+- `config_path` — 相关配置文件的绝对路径，未解析出来时为空串
+- `next_steps` — 可执行动作列表，**恒不为空**（未显式指定时按错误码取默认动作）。每条都是"调某个 tool / 设某个环境变量 / 改某个文件"，不写"请检查配置"这类无从下手的描述
+- `docs` — 文档位置，固定为 `docs/mcp/README.md`
+
+载荷放在哪里按返回类型分（见 §4 开头）：dict 型合并到顶层，list 型返回单元素纯错误载荷，`trigger_build` / `rebuild_last` 保持容器结构、四字段追加在顶层。
+
+错误码枚举、来源异常与 `next_steps` 方向：
+
+- `config_not_found` — 来源 `FileNotFoundError`（探测链上没有配置文件，或显式路径不存在）。方向：调 `where_config` 看候选顺序 → 调 `init_config` 生成模板 → 或设 `JENKINS_MCP_CONFIG` 绝对路径
+- `config_parse_error` — 来源 `yaml.YAMLError`、非校验类 `ValueError`（YAML/JSON 语法坏、顶层不是字典）。方向：调 `where_config` 确认在读哪个文件 → 逐行查语法 → 调 `doctor` 复查
+- `config_path_denied` — 来源 `resolve` 阶段的 `PermissionError`（路径落在白名单之外）。方向：改用 `allowed_config_bases` 之内的路径 → 或把该目录追加到 `JENKINS_MCP_CONFIG_ROOTS`
+- `config_permission_denied` — 来源 `read` 阶段的 `OSError`（含 Windows 对目录抛的 `PermissionError` 与 Linux 的 `IsADirectoryError`，以及 `init_config` 写入失败 / 锁超时）。方向：确认是文件而非目录 → 补齐读（写）权限后调 `doctor` 复查
+- `config_incomplete` — 来源以 `配置错误: ` 开头的 `ValueError`、项目缺 `name` 的 `KeyError`，以及占位符未替换。方向：把 `server.url` / `server.token` 改为真实取值 → 调 `doctor` 确认 `config_complete` 变 ok
+- `home_unavailable` — 来源 `RuntimeError`（HOME / USERPROFILE 均缺失，`Path.home()` 失败）。方向：设置 HOME（Windows 为 USERPROFILE）→ 或用 `JENKINS_MCP_CONFIG` 绕开用户级目录（`init_config` 另给出 `target='cwd'`）
+- `config_exists` — `init_config` 目标已存在且 `overwrite=false`（未做任何改动）。方向：调 `where_config` 看现有配置 → 确需覆盖时传 `overwrite=true` 并先开写门控
+- `write_not_allowed` — 未设 `JENKINS_MCP_ALLOW_WRITE`（`trigger_build` / `rebuild_last` / `save_config`，以及 `init_config` 的覆盖分支）。方向：在客户端 `env` 中设 `JENKINS_MCP_ALLOW_WRITE=1` → 重启 Server 后重试
+- `invalid_target` — 入参取值不合法：环境名为空、环境下无匹配项目、`params` 解析失败、`jenkins_url` 不在主机白名单、历史无可重建记录、`save_config` 非 YAML 路径、`init_config` 的 `target` / `format` 非法。方向：先用 `list_environments` / `list_projects` / `show_history` 确认可用取值，再用确认后的取值重调
+- `unknown_error` — 兜底码，给不属于上面任何一类的失败（历史文件损坏、Jenkins 网络异常等）。方向：调 `doctor` 拿完整体检 → 看 stderr 日志（可设 `JENKINS_MCP_LOG_LEVEL=DEBUG`）
+
+分类维度是"**用户下一步该做什么**"，不是"底层抛了什么异常"：`config_path_denied` 与 `config_permission_denied` 的底层异常同为 `PermissionError`，但前者要改 `JENKINS_MCP_CONFIG_ROOTS`、后者要改文件权限，因此判别依据是异常发生的阶段（`resolve` / `read` / `parse` / `validate`）而非异常类型。Jenkins 连接失败也刻意不套用这套分类（`requests` 的连接异常是 `OSError` 子类，会被误归成"补齐文件读权限"），而是单独给网络方向的 `next_steps`。
+
+
 
 ---
 
@@ -667,8 +837,12 @@ stdout 是 JSON-RPC 通道，**日志一律走 stderr**，客户端会自行落�
 
 MCP 相关测试位于 `tests/test_mcp/` 目录，覆盖：
 
-- `test_server.py` — FastMCP 实例（惰性单例）、`_register_tools()` 注册全部 11 个工具、`main()` 入口行为
-- `test_config_tools.py` / `test_build_tools.py` / `test_history_tools.py` / `test_diagnose_tools.py` — 各工具模块的参数解析、返回结构与异常处理
+- `test_server.py` — FastMCP 实例（惰性单例）、`_register_tools()` 注册全部 14 个工具、`current_log_sinks()`、`main()` 入口行为
+- `test_config_tools.py` / `test_build_tools.py` / `test_history_tools.py` / `test_diagnose_tools.py` — 各工具模块的参数解析、返回结构与异常处理（含统一失败载荷的形状）
+- `test_where_tools.py` / `test_doctor_tools.py` / `test_init_tools.py` — `where_config` 的来源判定与候选明细、`doctor` 的 11 项检查与判级、`init_config` 的分级写门控
+- `test_errors.py` — 错误码闭集、`failure_payload()` 的字段完整性、`classify()` 的阶段判别
+
+配置锚定本身的测试在 `tests/test_paths.py`（`search_bases_detail()` / `probe_report()` 的顺序与跳过原因）。
 
 运行方式：
 
@@ -708,10 +882,14 @@ uv run mcp dev jenkins_config/mcp/server.py
 | 加了 `env` 后 server 起不来 | 客户端把自定义 `env` 当替换而非合并，`PATH` 丢了 | 在 `env` 里一并显式给出 `PATH` |
 | 启动即退出并提示缺少依赖 | 未安装 `mcp` extra | 执行 `uv sync --extra mcp` 或 `pip install "jenkins-config[mcp]"` |
 | 连接失败 | Jenkins 服务器不可达 | 检查网络和 `jenkins-config.yaml` 中的服务器地址 |
-| 配置文件不存在 | 未创建配置文件 | 运行 `jenkins-build --init` 初始化配置 |
+| 配置文件不存在 | 未创建配置文件 | 调 `init_config` 生成模板（见 §3.9），或运行 `jenkins-build --init` |
+| 不确定读的是哪份配置 | 探测链上有多份配置文件 | 调 `where_config` 看 `config_path` 与 `source`；要固定一份用 `JENKINS_MCP_CONFIG` |
+| 说不清哪一步坏了 | 配置 / 权限 / 日志任一层出问题 | 调 `doctor`（默认不发网络请求），按 `checks` 里第一个 `error` 项的 `hint` 处理 |
+| `init_config` 返回 `config_exists` | 目标已有配置，默认不覆盖 | 直接编辑现有文件；确需覆盖时开 `JENKINS_MCP_ALLOW_WRITE=1` 并传 `overwrite=true` |
+| `list_environments` 返回一条带 `error_code` 的记录 | 配置加载失败（list 型工具的失败载荷） | 按该元素的 `next_steps` 处理，不要把它当成一个叫 error 的环境 |
 | Tool 调用报错 | 参数格式错误 | 检查参数类型和必填项 |
 | `trigger_build` 返回 `build_num: null` | Jenkins 队列静默期内编号未分配 | 正常现象，稍后用 `get_build_status` 查询；该记录 `build_num=0` 不参与重建分组 |
-| 返回「已禁止写操作」 | 未开启写开关 | 在 MCP 客户端的 server 配置中设置 `JENKINS_MCP_ALLOW_WRITE=1` 并重启客户端（见 §7.3） |
+| 返回 `error_code: write_not_allowed` | 未开启写开关 | 在 MCP 客户端的 server 配置中设置 `JENKINS_MCP_ALLOW_WRITE=1` 并重启客户端（见 §7.3） |
 | `rebuild_last` 返回地址不被允许 | 直连模式的 `jenkins_url` 不在白名单 | 用配置文件模式，或在 `JENKINS_MCP_ALLOWED_HOSTS` 中加入该主机 |
 | `get_build_log` 开头出现「日志已截断」 | 日志超过 `tail_kb`（默认 50KB） | 正常现象，只保留尾部；需要更多内容时增大 `tail_kb` |
 | 历史统计成功率偏低 | `BUILDING` 占位记录未落终态 | 占位记录已不参与成功率分母，可用 `building` 字段确认数量；真实状态用 `get_build_status` 查询 |

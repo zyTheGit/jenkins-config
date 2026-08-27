@@ -69,7 +69,10 @@ pi install npm:pi-mcp-adapter
 
 ### 说明
 
-- 共 11 个工具：环境/项目/配置查询、构建触发、状态与日志查询、历史统计、重建上次构建；另有只读 Resources 与 Prompts
+- 共 14 个工具：环境/项目/配置查询、构建触发、状态与日志查询、历史统计、重建上次构建；另有只读 Resources 与 Prompts
+- `where_config` 只查路径不读内容，回答"这份配置到底是从哪个目录探测出来的"
+- `doctor` 默认不发网络请求，一次列出配置定位、可读、可解析、写权限、日志落点等本地体检项
+- `init_config` 在用户级目录 `~/.jenkins-config` 生成配置模板，凭据保持占位符待你手填
 - 默认**只读**，`JENKINS_MCP_ALLOW_WRITE=1` 才放行触发构建等写操作。这类变量只能写在 `env` 里，shell 里 `export` 无效
 - 改完配置要重启客户端，MCP 配置不热加载
 - 支持 Windows x64、macOS x64 / arm64、Linux x64 / arm64
