@@ -26,7 +26,10 @@ from jenkins_config.mcp.utils import (
     resolve_config_path,
     write_allowed,
     write_denied_message,
+    write_target_denied,
+    write_target_denied_steps,
 )
+from jenkins_config.paths import APP_DIR_NAME
 
 
 @mcp.tool()
@@ -156,13 +159,21 @@ def save_config(config_path: str = "") -> dict[str, Any]:
             )
 
         target = Path(resolved)
+        if write_target_denied(target):
+            return failure_payload(
+                ErrorCode.CONFIG_PATH_DENIED,
+                f"写入目标所在的宿主目录过宽，拒绝写入: {resolved}",
+                resolved,
+                write_target_denied_steps(
+                    f"把配置迁到用户级目录 ~/{APP_DIR_NAME} 后重试"
+                ),
+            )
+
         config = get_config(config_path)
 
         # 备份逻辑与 init_config 共用 utils.backup_config_file：两处各写一份时，
         # 只要有一处改了备份命名规则，另一处就会静默沿用旧规则
         backup = backup_config_file(target)
-
-
         config.save(resolved)
         return {"message": "配置已保存", "path": resolved, "backup": backup}
     except Exception as e:

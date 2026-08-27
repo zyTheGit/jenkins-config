@@ -2,7 +2,40 @@
 
 默认使用 YAML 格式（支持注释），JSON 格式仍兼容。配置文件默认名为 `jenkins-config.yaml`，也可用 `-c` 指定路径。
 
+用 `./jenkins-auto-build.sh --init -i` 生成模板。
+
+## 默认读取位置
+
+不指定路径时，按顺序逐个目录探测 `jenkins-config.yaml` → `.yml` → `.json`，命中第一个就停。每个目录都**先看其 `.jenkins-config/` 子目录，再看目录本身**：
+
+- **源码 / pip 安装**：项目根/.jenkins-config → 项目根 → 当前工作目录/.jenkins-config → 当前工作目录 → 用户级配置目录
+- **npx / 独立可执行文件**：当前工作目录/.jenkins-config → 当前工作目录 → 可执行文件所在目录（同样先看其 `.jenkins-config/`）→ 用户级配置目录
+
+点目录排在前面，是因为它只可能是 `--init` / `init_config` 显式创建出来的，而目录顶层那份可能只是历史遗留；这样项目级布局与用户级目录结构一致。顶层位置继续支持，既有配置不用搬。
+
+> 注意反过来的一面：某个目录里一旦出现 `.jenkins-config/jenkins-config.yaml`，同目录顶层那份就整体失效，连带它的 `data/build_history.json` 也不再被读到（历史看起来像丢了）。因此 `init_config` 在生成的文件会顶掉一份已生效配置时直接返回 `config_exists` 并回报被遮蔽的路径，只有显式 `overwrite=true` 才继续（返回体里的 `shadowed_path` 会标出来）。
+
+
+用户级目录三平台统一为 `~/.jenkins-config/`（Windows 即 `%USERPROFILE%\.jenkins-config\`）：
+
+- 配置：`~/.jenkins-config/jenkins-config.yaml`
+- 构建历史：`~/.jenkins-config/data/build_history.json`
+- 日志：`~/.jenkins-config/logs/`（仅 MCP Server 设了 `JENKINS_MCP_LOG_FILE=auto` 时才落盘）
+
+不随平台变化，因此没有"配置目录和数据目录是不是同一个"这类平台差异要记；代价是不再尊重 `XDG_CONFIG_HOME` 之类的系统惯例，换来一句话就能说清配置该放哪。
+
+**构建历史**始终落在 `<配置文件所在目录>/data/build_history.json`。
+
+CLI 侧用 `-c` 指定其他路径：
+
+```bash
+./jenkins-auto-build.sh -c /path/to/jenkins-config.yaml --list-envs
+```
+
+MCP Server 的工作目录由客户端决定、不可控，所以那一侧另有 `JENKINS_MCP_CONFIG`（指向具体文件，仅绝对路径）与 `JENKINS_MCP_CONFIG_ROOTS`（追加允许的目录）两个变量，CLI 不读它们，见 [MCP Server 文档](mcp/README.md) §3.7 与 §7.1。
+
 ## 完整示例
+
 
 ```yaml
 server:

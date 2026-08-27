@@ -14,6 +14,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from jenkins_config.cli import _resolve_config, main
+from jenkins_config.paths import APP_DIR_NAME
+
 
 # ============================================================================
 # _resolve_config
@@ -27,16 +29,17 @@ def test_resolve_absolute_path(tmp_path):
     assert result == Path(abs_path)
 
 
-def test_resolve_specified_relative_source(tmp_path):
-    """指定相对路径解析到项目根目录"""
+def test_resolve_specified_relative_source(tmp_path, isolated_user_dir):
+    """指定相对路径且各处都不存在时，回退到项目根的 .jenkins-config"""
     fake_paths = str(tmp_path / "jenkins_config" / "paths.py")
     with (
         patch("jenkins_config.paths.sys.frozen", False, create=True),
         patch("jenkins_config.paths.__file__", fake_paths),
         patch("jenkins_config.paths.Path.cwd", return_value=tmp_path),
+        isolated_user_dir,
     ):
         result = _resolve_config("jenkins-config.yaml")
-        expected = tmp_path / "jenkins-config.yaml"
+        expected = tmp_path / APP_DIR_NAME / "jenkins-config.yaml"
         assert result == expected
 
 
@@ -74,8 +77,8 @@ def test_resolve_specified_relative_frozen_cwd_missing(tmp_path):
         assert result == config_in_exe
 
 
-def test_resolve_specified_relative_frozen_both_missing(tmp_path):
-    """EXE 模式：两处都无配置，回退到当前目录"""
+def test_resolve_specified_relative_frozen_both_missing(tmp_path, isolated_user_dir):
+    """EXE 模式：两处都无配置，回退到当前目录的 .jenkins-config"""
     config_arg = "jenkins-config.yaml"
     exe_dir = tmp_path / "dist"
     exe_dir.mkdir(parents=True)
@@ -85,9 +88,10 @@ def test_resolve_specified_relative_frozen_both_missing(tmp_path):
         patch("jenkins_config.cli.Path.cwd", return_value=tmp_path),
         patch("jenkins_config.cli.sys.executable",
               str(exe_dir / "jenkins-build.exe")),
+        isolated_user_dir,
     ):
         result = _resolve_config(config_arg)
-        assert result == tmp_path / config_arg
+        assert result == tmp_path / APP_DIR_NAME / config_arg
 
 
 def test_resolve_auto_detect_yaml(tmp_path):
@@ -117,16 +121,17 @@ def test_resolve_auto_detect_json_fallback(tmp_path):
         assert result == tmp_path / "jenkins-config.json"
 
 
-def test_resolve_auto_detect_nonexistent(tmp_path):
-    """空参数时两者都不存在，返回 yaml 路径"""
+def test_resolve_auto_detect_nonexistent(tmp_path, isolated_user_dir):
+    """空参数时两者都不存在，返回 .jenkins-config 下的 yaml 路径"""
     fake_paths = str(tmp_path / "jenkins_config" / "paths.py")
     with (
         patch("jenkins_config.paths.sys.frozen", False, create=True),
         patch("jenkins_config.paths.__file__", fake_paths),
         patch("jenkins_config.paths.Path.cwd", return_value=tmp_path),
+        isolated_user_dir,
     ):
         result = _resolve_config("")
-        assert result == tmp_path / "jenkins-config.yaml"
+        assert result == tmp_path / APP_DIR_NAME / "jenkins-config.yaml"
 
 
 # ============================================================================

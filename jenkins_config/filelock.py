@@ -95,6 +95,25 @@ else:
             pass
 
 
+def lock_path_for(target: Path) -> Path:
+    """给出目标文件对应的锁哨兵路径
+
+    命名规则（同目录 `<name>.lock`）只在这里定义一次：调用方若各自拼一遍，
+    改名时就会出现"加锁用新名、清理认旧名"的静默不一致。
+
+    Args:
+        target: 需要保护的目标文件路径
+
+    Returns:
+        锁哨兵文件路径（可能尚不存在）
+
+    Example:
+        >>> lock_path_for(Path("data/build_history.json")).name
+        'build_history.json.lock'
+    """
+    return target.parent / f"{target.name}.lock"
+
+
 @contextmanager
 def file_lock(
     target: Path, create: bool = True, required: bool = False
@@ -124,7 +143,7 @@ def file_lock(
         >>> with file_lock(Path("data/build_history.json"), required=True):
         ...     pass  # 此块内对该文件的读改写是进程间互斥的
     """
-    lock_path = target.parent / f"{target.name}.lock"
+    lock_path = lock_path_for(target)
     if not create and not target.exists() and not lock_path.exists():
         # 只读场景且无文件可保护：不创建任何文件
         yield

@@ -235,8 +235,41 @@ def test_cwd_too_broad_is_denied_with_ways_out(monkeypatch):
     assert any(CONFIG_ROOTS_ENV_VAR in step for step in result["next_steps"])
 
 
+def test_cwd_equal_to_home_is_allowed(fake_home, monkeypatch):
+    """CWD 恰为家目录时放行：落点就是 ~/.jenkins-config，正是期望位置
+
+    过宽判定用的是 resolve() 后的路径，所以家目录是符号链接时也不会误拒。
+    """
+    monkeypatch.chdir(fake_home)
+
+    result = init_config(target="cwd")
+
+    assert result["created"] is True
+    assert Path(result["path"]) == _user_config_file(fake_home)
+
+
+def test_cwd_too_broad_without_home_reports_home_unavailable(monkeypatch):
+    """CWD 过宽且家目录不可用时归为 home_unavailable
+
+    此时"改用 target='user'"必然再失败一次，不能作为 next_steps 的首选出路。
+    """
+    def _no_home():
+        """模拟 HOME / USERPROFILE 均缺失"""
+        raise RuntimeError("Could not determine home directory.")
+
+    monkeypatch.chdir(Path(Path.cwd().anchor))
+    monkeypatch.setattr(Path, "home", staticmethod(_no_home))
+    monkeypatch.delenv(CONFIG_ENV_VAR, raising=False)
+
+    result = init_config(target="cwd")
+
+    assert result["error_code"] == "home_unavailable"
+    assert result["created"] is False
+    assert result["next_steps"]
+
+
 def test_cwd_target_writes_into_working_directory(tmp_path, monkeypatch, fake_home):
-    """target='cwd' 在白名单内的工作目录下正常生成配置"""
+    """target='cwd' 落在工作目录的 .jenkins-config 下（与用户级目录同构）"""
     workdir = tmp_path / "workdir"
     workdir.mkdir()
     monkeypatch.chdir(workdir)
@@ -244,7 +277,148 @@ def test_cwd_target_writes_into_working_directory(tmp_path, monkeypatch, fake_ho
     result = init_config(target="cwd")
 
     assert result["created"] is True
-    assert Path(result["path"]) == workdir / DEFAULT_CONFIG_FILE_NAME
+    assert Path(result["path"]) == workdir / APP_DIR_NAME / DEFAULT_CONFIG_FILE_NAME
+    assert any(".gitignore" in step for step in result["next_steps"])
+
+
+def test_cwd_target_config_is_auto_discoverable(tmp_path, monkeypatch, fake_home):
+    """target='cwd' 生成的配置必须能被自动探测到（否则零配置链路断在这里）"""
+    from jenkins_config import paths
+
+    empty_project = tmp_path / "no_project"
+    empty_project.mkdir()
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    monkeypatch.setattr(paths, "project_root", lambda: empty_project)
+    monkeypatch.chdir(workdir)
+
+    created = init_config(target="cwd")["path"]
+
+    assert paths.resolve_config_file() == Path(created)
+
+
+# ============================================================================
+# 遮蔽既有配置
+# ============================================================================
+
+
+def _seed_flat_config(workdir: Path) -> Path:
+    """在工作目录顶层预置一份"用户已在用的配置"
+
+    Args:
+        workdir: 工作目录
+
+    Returns:
+        已写入哨兵内容的顶层配置文件路径
+    """
+    existing = workdir / DEFAULT_CONFIG_FILE_NAME
+    existing.write_text(SENTINEL, encoding="utf-8")
+    return existing
+
+
+def test_shadowing_existing_config_is_refused(tmp_path, monkeypatch, fake_home):
+    """点目录会顶掉同目录顶层那份生效配置时拒绝，并回报被遮蔽的路径"""
+    from jenkins_config import paths
+
+    empty_project = tmp_path / "no_project"
+    empty_project.mkdir()
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    monkeypatch.setattr(paths, "project_root", lambda: empty_project)
+    monkeypatch.chdir(workdir)
+    existing = _seed_flat_config(workdir)
+
+    result = init_config(target="cwd")
+
+    assert result["error_code"] == "config_exists"
+    assert result["created"] is False
+    assert str(existing) in result["error"]
+    assert not (workdir / APP_DIR_NAME).exists()
+    assert existing.read_text(encoding="utf-8") == SENTINEL
+
+
+def test_shadowing_is_allowed_with_overwrite_and_reported(
+    tmp_path, monkeypatch, fake_home
+):
+    """显式 overwrite=true 时允许改用点目录，但返回体必须标出被遮蔽的路径"""
+    from jenkins_config import paths
+
+    empty_project = tmp_path / "no_project"
+    empty_project.mkdir()
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    monkeypatch.setattr(paths, "project_root", lambda: empty_project)
+    monkeypatch.setenv(WRITE_ENV_VAR, "1")
+    monkeypatch.chdir(workdir)
+    existing = _seed_flat_config(workdir)
+
+    result = init_config(target="cwd", overwrite=True)
+
+    assert result["created"] is True
+    assert result["shadowed_path"] == str(existing.resolve())
+    assert existing.read_text(encoding="utf-8") == SENTINEL
+
+
+def test_lower_priority_target_is_not_treated_as_shadowing(
+    tmp_path, monkeypatch, fake_home
+):
+    """生成的文件优先级更低时不算遮蔽：用户级目录排在项目根 / CWD 之后"""
+    from jenkins_config import paths
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    monkeypatch.setattr(paths, "project_root", lambda: workdir)
+    monkeypatch.chdir(workdir)
+    _seed_flat_config(workdir)
+
+    result = init_config(target="user")
+
+    assert result["created"] is True
+    assert result["shadowed_path"] == ""
+
+
+def test_same_dir_alternate_suffix_is_treated_as_shadowing(
+    tmp_path, monkeypatch, fake_home
+):
+    """同目录内的 .yml 也会被生成的 .yaml 顶掉：排名必须带上文件名维度"""
+    from jenkins_config import paths
+
+    empty_project = tmp_path / "no_project"
+    empty_project.mkdir()
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    monkeypatch.setattr(paths, "project_root", lambda: empty_project)
+    monkeypatch.chdir(workdir)
+    existing = workdir / APP_DIR_NAME / "jenkins-config.yml"
+    existing.parent.mkdir(parents=True)
+    existing.write_text(SENTINEL, encoding="utf-8")
+
+    result = init_config(target="cwd")
+
+    assert result["error_code"] == "config_exists"
+    assert result["created"] is False
+    assert str(existing) in result["error"]
+    assert not (workdir / APP_DIR_NAME / DEFAULT_CONFIG_FILE_NAME).exists()
+    assert existing.read_text(encoding="utf-8") == SENTINEL
+
+
+def test_lower_priority_target_reports_effective_path(
+    tmp_path, monkeypatch, fake_home
+):
+    """新文件被更高优先级配置压住时，返回体必须点明真正生效的仍是哪一份"""
+    from jenkins_config import paths
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    monkeypatch.setattr(paths, "project_root", lambda: workdir)
+    monkeypatch.chdir(workdir)
+    existing = _seed_flat_config(workdir)
+
+    result = init_config(target="user")
+
+    assert result["created"] is True
+    assert result["effective_path"] == str(existing.resolve())
+    assert str(existing.resolve()) in result["next_steps"][0]
 
 
 # ============================================================================

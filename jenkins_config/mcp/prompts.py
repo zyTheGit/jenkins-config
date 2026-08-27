@@ -79,7 +79,8 @@ def setup_workflow() -> str:
 1. 调用 doctor 做一次本地体检，确认卡在哪一层（配置是否存在、是否填完、写开关状态）
 2. 调用 where_config 查看候选目录顺序与当前会读到哪个路径
 3. 若配置文件尚不存在，调用 init_config 生成模板（默认写入用户级目录
-   ~/.jenkins-config；需要放在当前工作目录时传 target='cwd'）。
+   ~/.jenkins-config；需要放在当前工作目录时传 target='cwd'，落点是
+   <CWD>/.jenkins-config/，与用户级目录结构一致，记得把该目录加进 .gitignore）。
    若返回 config_exists，说明已有配置，不要覆盖，回到第 2 步确认路径
 4. 请用户打开 init_config 返回的 path，把 server.url 与 server.token 从占位符改为
    真实取值（token 属于凭据，必须由用户本人填写，不要代填或猜测），

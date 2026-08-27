@@ -8,9 +8,11 @@ CLI（cli.py / cmd_build.py / cmd_list.py）与 MCP Server（mcp/utils.py）
 1. 显式绝对路径原样使用；
 2. 显式相对路径按运行模式在候选目录中查找，找不到则回退第一个候选目录；
 3. 未指定路径时在候选目录中按 CONFIG_FILE_NAMES 顺序探测；
-4. 候选目录顺序：
-   - 源码模式：项目根目录 → 进程当前工作目录 → 用户级配置目录
-   - EXE 冻结模式：进程当前工作目录 → exe 所在目录 → 用户级配置目录
+4. 候选目录顺序（每个非用户级目录都先看其 .jenkins-config 子目录，再看目录本身）：
+   - 源码模式：项目根/.jenkins-config → 项目根 → CWD/.jenkins-config → CWD
+     → 用户级配置目录
+   - EXE 冻结模式：CWD/.jenkins-config → CWD → exe 目录/.jenkins-config
+     → exe 目录 → 用户级配置目录
 
 环境变量 JENKINS_MCP_CONFIG 只对 MCP Server 生效（由 mcp/utils.resolve_config_path
 在调用本模块前应用），本模块的自动探测不读取它——否则用户为 MCP 客户端导出该变量后，
@@ -33,8 +35,12 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# 用户级目录名（挂在家目录下，带点前缀避免污染 ls ~ 的可见输出）
+# 用户级目录名（挂在家目录下，带点前缀避免污染 ls ~ 的可见输出）。
+# 同一个名字也用作项目级 / 工作目录级的应用目录名，见 _with_app_dirs()
 APP_DIR_NAME = ".jenkins-config"
+
+# 应用目录候选的 kind 后缀（在原候选 kind 上追加，避免另立一张手工维护的名字表）
+APP_DIR_KIND_SUFFIX = "_app_dir"
 
 # 用户级日志子目录（相对 APP_DIR_NAME）
 LOG_DIR_NAME = "logs"
@@ -134,6 +140,34 @@ def _base_detail(kind: str, base: Path, order: int) -> dict[str, Any]:
     }
 
 
+def _with_app_dirs(pairs: list[tuple[str, Path]]) -> list[tuple[str, Path]]:
+    """为每个候选目录补一个 .jenkins-config 子目录候选，并排在其前面
+
+    用户级形态是 `~/.jenkins-config/`（配置 + data/ + logs/ 都在里面），而项目根 /
+    工作目录此前只认目录顶层那一份 jenkins-config.yaml，两种形态的目录结构不一致，
+    "配置该放哪、历史落在哪"就得分两套说法讲。补上同名子目录后
+    `<项目根>/.jenkins-config/` 与 `~/.jenkins-config/` 结构完全一致。
+
+    子目录排在目录本身之前：它只可能是被显式创建出来的（init_config / --init），
+    而目录顶层那份可能只是历史遗留。顶层候选一并保留，既有部署不会因此失效。
+
+    Args:
+        pairs: (kind, base) 候选列表
+
+    Returns:
+        长度翻倍的 (kind, base) 列表，子目录候选的 kind 带 APP_DIR_KIND_SUFFIX 后缀
+
+    Example:
+        >>> [kind for kind, _ in _with_app_dirs([("cwd", Path("/tmp"))])]
+        ['cwd_app_dir', 'cwd']
+    """
+    expanded: list[tuple[str, Path]] = []
+    for kind, base in pairs:
+        expanded.append((f"{kind}{APP_DIR_KIND_SUFFIX}", base / APP_DIR_NAME))
+        expanded.append((kind, base))
+    return expanded
+
+
 def search_bases_detail() -> list[dict[str, Any]]:
     """获取配置文件探测候选目录的完整明细（含被跳过的候选）
 
@@ -145,14 +179,15 @@ def search_bases_detail() -> list[dict[str, Any]]:
 
     Returns:
         明细列表，每项含 base（str 或 None）、order（从 1 严格递增）、
-        kind、exists（目录是否存在）、matched_file（命中的配置文件，未命中为 ""）、
+        kind（含 `<kind>_app_dir` 形态的 .jenkins-config 子目录候选）、
+        exists（目录是否存在）、matched_file（命中的配置文件，未命中为 ""）、
         skipped_reason（'' 或 'home_unavailable'）
 
     Example:
         >>> [item["order"] for item in search_bases_detail()][:2]
         [1, 2]
     """
-    if getattr(sys, "frozen", False):
+    if runtime_mode() == "frozen":
         pairs: list[tuple[str, Path]] = [
             ("cwd", Path.cwd()),
             ("exe_dir", Path(sys.executable).resolve().parent),
@@ -162,7 +197,7 @@ def search_bases_detail() -> list[dict[str, Any]]:
 
     details = [
         _base_detail(kind, base, order)
-        for order, (kind, base) in enumerate(pairs, start=1)
+        for order, (kind, base) in enumerate(_with_app_dirs(pairs), start=1)
     ]
 
     order = len(details) + 1
@@ -195,8 +230,9 @@ def search_bases() -> list[Path]:
     实现委托给 search_bases_detail() 后按 base 过滤，保证"候选顺序"只有一份定义。
 
     Returns:
-        候选目录列表：源码模式为 [项目根, CWD, 用户配置目录]，
-        EXE 模式为 [CWD, exe 目录, 用户配置目录]；家目录不可用时末位缺省
+        候选目录列表：源码模式为 [项目根/.jenkins-config, 项目根,
+        CWD/.jenkins-config, CWD, 用户配置目录]，EXE 模式把前两项换成
+        CWD 与 exe 目录的同构写法；家目录不可用时末位缺省
 
     Example:
         >>> len(search_bases()) >= 2
@@ -299,7 +335,9 @@ def resolve_config_file(config_arg: str | Path = "") -> Path:
         config_arg: 用户指定的路径，为空时自动探测
 
     Returns:
-        配置文件路径；均未找到时返回首个候选目录下的默认 yaml 路径（便于报错提示）
+        配置文件路径；均未找到时返回首个候选目录（`<项目根>/.jenkins-config`
+        或 EXE 模式下 `<CWD>/.jenkins-config`）下的默认 yaml 路径，便于报错提示
+        与 --init 落盘位置一致
 
     Example:
         >>> target = Path.cwd() / "my.yaml"

@@ -4,6 +4,7 @@
 
 测试覆盖：
 - search_bases_detail 的 order 严格递增与 kind 顺序
+- .jenkins-config 子目录候选排在对应目录之前
 - HOME 缺失时用户级候选降级为 skipped_reason='home_unavailable'
 - search_bases 改为基于明细实现后行为不变（源码 / 冻结两种模式）
 - probe_report 的 explicit_arg / probed / fallback 三态与 matched_file、history_path
@@ -72,13 +73,25 @@ def test_search_bases_detail_order_is_strictly_increasing_from_one(tmp_path, mon
 
 
 def test_search_bases_detail_source_mode_kinds(tmp_path, monkeypatch):
-    """验证源码模式的候选类型顺序：项目根 → CWD → 用户级配置目录"""
+    """验证源码模式候选顺序：每个目录先看 .jenkins-config 子目录，再看目录本身"""
     root, cwd, user_dir = _isolate_bases(tmp_path, monkeypatch)
 
     details = paths.search_bases_detail()
 
-    assert [item["kind"] for item in details] == ["project_root", "cwd", "user_config_dir"]
-    assert [item["base"] for item in details] == [str(root), str(cwd), str(user_dir)]
+    assert [item["kind"] for item in details] == [
+        "project_root_app_dir",
+        "project_root",
+        "cwd_app_dir",
+        "cwd",
+        "user_config_dir",
+    ]
+    assert [item["base"] for item in details] == [
+        str(root / paths.APP_DIR_NAME),
+        str(root),
+        str(cwd / paths.APP_DIR_NAME),
+        str(cwd),
+        str(user_dir),
+    ]
     assert all(item["skipped_reason"] == "" for item in details)
 
 
@@ -91,20 +104,40 @@ def test_search_bases_detail_frozen_mode_kinds(tmp_path, monkeypatch):
 
     details = paths.search_bases_detail()
 
-    assert [item["kind"] for item in details] == ["cwd", "exe_dir", "user_config_dir"]
+    assert [item["kind"] for item in details] == [
+        "cwd_app_dir",
+        "cwd",
+        "exe_dir_app_dir",
+        "exe_dir",
+        "user_config_dir",
+    ]
 
 
 def test_search_bases_detail_reports_matched_file(tmp_path, monkeypatch):
     """验证命中的配置文件按 CONFIG_FILE_NAMES 优先级记录到 matched_file"""
-    root, cwd, _ = _isolate_bases(tmp_path, monkeypatch)
+    root, _, _ = _isolate_bases(tmp_path, monkeypatch)
     (root / "jenkins-config.yaml").write_text("server: {}", encoding="utf-8")
 
     details = paths.search_bases_detail()
 
-    assert details[0]["matched_file"] == str(root / "jenkins-config.yaml")
-    assert details[0]["exists"] is True
-    # CWD 下没有配置文件时 matched_file 为空字符串，而不是 None
-    assert details[1]["matched_file"] == ""
+    # 项目根的 .jenkins-config 子目录不存在，命中落在下一位（项目根本身）
+    assert details[0]["kind"] == "project_root_app_dir"
+    assert details[0]["exists"] is False
+    assert details[0]["matched_file"] == ""
+    assert details[1]["matched_file"] == str(root / "jenkins-config.yaml")
+    assert details[1]["exists"] is True
+
+
+def test_app_dir_config_wins_over_flat_file(tmp_path, monkeypatch):
+    """验证 <项目根>/.jenkins-config 里的配置优先于项目根顶层那份"""
+    root, _, _ = _isolate_bases(tmp_path, monkeypatch)
+    flat = root / "jenkins-config.yaml"
+    flat.write_text("server: {}", encoding="utf-8")
+    nested = root / paths.APP_DIR_NAME / "jenkins-config.yaml"
+    nested.parent.mkdir(parents=True)
+    nested.write_text("server: {}", encoding="utf-8")
+
+    assert paths.resolve_config_file() == nested
 
 
 def test_search_bases_detail_marks_home_unavailable(tmp_path, monkeypatch):
@@ -133,22 +166,31 @@ def test_search_bases_detail_marks_home_unavailable(tmp_path, monkeypatch):
 
 
 def test_search_bases_matches_detail_bases(tmp_path, monkeypatch):
-    """验证 search_bases 与明细一致：源码模式为 [项目根, CWD, 用户配置目录]"""
+    """验证 search_bases 与明细一致：应用子目录排在对应目录之前"""
     root, cwd, user_dir = _isolate_bases(tmp_path, monkeypatch)
 
-    assert paths.search_bases() == [root, cwd, user_dir]
+    assert paths.search_bases() == [
+        root / paths.APP_DIR_NAME,
+        root,
+        cwd / paths.APP_DIR_NAME,
+        cwd,
+        user_dir,
+    ]
 
 
 def test_search_bases_frozen_mode_unchanged(tmp_path, monkeypatch):
-    """验证冻结模式下候选仍为 [CWD, exe 目录, 用户配置目录]"""
+    """验证冻结模式下候选仍以 CWD → exe 目录 → 用户配置目录为骨架"""
     import sys
 
     _, cwd, user_dir = _isolate_bases(tmp_path, monkeypatch)
     monkeypatch.setattr(sys, "frozen", True, raising=False)
+    exe_dir = Path(sys.executable).resolve().parent
 
     assert paths.search_bases() == [
+        cwd / paths.APP_DIR_NAME,
         cwd,
-        Path(sys.executable).resolve().parent,
+        exe_dir / paths.APP_DIR_NAME,
+        exe_dir,
         user_dir,
     ]
 
@@ -163,7 +205,12 @@ def test_search_bases_skips_user_dir_without_home(tmp_path, monkeypatch):
 
     monkeypatch.setattr(Path, "home", staticmethod(_no_home))
 
-    assert paths.search_bases() == [root, tmp_path]
+    assert paths.search_bases() == [
+        root / paths.APP_DIR_NAME,
+        root,
+        tmp_path / paths.APP_DIR_NAME,
+        tmp_path,
+    ]
 
 
 # ============================================================================
@@ -203,19 +250,21 @@ def test_probe_report_probed_hits_first_base(tmp_path, monkeypatch):
     assert report["source"] == "probed"
     assert report["config_path"] == str(expected)
     assert report["exists"] is True
-    assert report["bases"][0]["matched_file"] == str(expected)
+    assert report["bases"][1]["matched_file"] == str(expected)
     assert report["history_path"] == str(root / "data" / "build_history.json")
 
 
 def test_probe_report_fallback_when_nothing_found(tmp_path, monkeypatch):
-    """验证全部候选都未命中时 source 为 fallback，且 exists 必为 false"""
+    """验证全部候选都未命中时 source 为 fallback，且回退到项目根的应用目录"""
     root, _, _ = _isolate_bases(tmp_path, monkeypatch)
 
     report = paths.probe_report()
 
     assert report["source"] == "fallback"
     assert report["exists"] is False
-    assert report["config_path"] == str(root / paths.CONFIG_FILE_NAMES[0])
+    assert report["config_path"] == str(
+        root / paths.APP_DIR_NAME / paths.CONFIG_FILE_NAMES[0]
+    )
     assert all(item["matched_file"] == "" for item in report["bases"])
 
 

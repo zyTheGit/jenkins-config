@@ -355,8 +355,10 @@ def test_resolve_config_path_source_mode_anchors_to_project_root(tmp_path, monke
     assert utils.resolve_config_path() == str(expected.resolve())
 
 
-def test_resolve_config_path_returns_default_when_missing(tmp_path, monkeypatch):
-    """验证所有候选路径都不存在时返回项目根目录下的默认文件名"""
+def test_resolve_config_path_returns_default_when_missing(
+    tmp_path, monkeypatch, patched_user_dir
+):
+    """验证所有候选路径都不存在时返回项目根 .jenkins-config 下的默认文件名"""
     from jenkins_config import paths
     from jenkins_config.mcp import utils
 
@@ -365,7 +367,9 @@ def test_resolve_config_path_returns_default_when_missing(tmp_path, monkeypatch)
     monkeypatch.setattr(paths, "__file__", str(root / "jenkins_config" / "paths.py"))
     monkeypatch.chdir(tmp_path)
 
-    assert utils.resolve_config_path() == str(root / "jenkins-config.yaml")
+    assert utils.resolve_config_path() == str(
+        root / paths.APP_DIR_NAME / "jenkins-config.yaml"
+    )
 
 
 def test_resolve_config_path_detects_yml_suffix(tmp_path, monkeypatch):

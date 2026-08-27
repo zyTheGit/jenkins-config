@@ -23,6 +23,7 @@
 .eggs/
 .idea/
 .installed.cfg
+.jenkins-config/
 .pytest_cache/
 .Python
 .venv/

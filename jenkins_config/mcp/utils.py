@@ -19,12 +19,14 @@ from typing import Any, Iterator
 from jenkins_config.config_io import PLACEHOLDER_VALUES
 from jenkins_config.mcp.errors import ErrorCode, classify, failure_payload
 from jenkins_config.paths import (
+    APP_DIR_NAME,
     CONFIG_ENV_VAR,
     CONFIG_FILE_NAMES,
     env_config_file,
     probe_report,
     resolve_config_file,
     search_bases,
+    user_config_dir,
     resolve_history_path as _resolve_history_path,
 )
 
@@ -155,6 +157,72 @@ def is_base_too_broad(base: Path) -> bool:
         True
     """
     return _is_too_broad(base)
+
+
+def write_target_denied(target_path: Path) -> bool:
+    """判断配置文件的写入落点是否挂在过宽的宿主目录下
+
+    读边界与写边界不是同一个问题：`<盘符根>/.jenkins-config` 是个窄目录，
+    因此可以进 allowed_config_bases() 被读取；但"在磁盘根目录里凭空长出一个
+    配置目录"不该发生。这道判定只服务写入方（init_config / save_config），
+    判定条件仍转发 _is_too_broad，不复制一份——两处各写一遍时，
+    只要有一处放宽，另一处就会静默不一致。
+
+    只对 `<宿主>/.jenkins-config` 形态的落点生效：顶层落点（`<base>/jenkins-config.yaml`）
+    由白名单本身把关（文件系统根与家目录本身已被剔除），在这里再判一次会把
+    JENKINS_MCP_CONFIG 显式指定的可信文件一并挡掉。落点恰为用户级目录时一律放行，
+    那正是期望位置；落点恰为 JENKINS_MCP_CONFIG 指向的那个文件时同样放行——
+    读路径已按"部署方设定即可信"精确放行它，写路径再挡一次就成了
+    "读得却写不得"，而给出的出路（迁到用户级目录）恰好违背部署方的显式设定。
+
+    Args:
+        target_path: 目标配置文件路径（不必已存在）
+
+    Returns:
+        落点所在的宿主目录过宽时返回 True
+
+    Example:
+        >>> write_target_denied(Path.cwd() / "jenkins-config.yaml")
+        False
+    """
+    target_dir = target_path.parent.resolve()
+    if target_dir.name != APP_DIR_NAME:
+        return False
+    from_env = env_config_file()
+    if from_env is not None and target_path.resolve() == from_env.resolve():
+        return False
+    try:
+        if target_dir == user_config_dir().resolve():
+            return False
+    except RuntimeError:
+        # 家目录不可解析时无从比较，继续按宿主目录判定
+        pass
+    return _is_too_broad(target_dir.parent)
+
+
+def write_target_denied_steps(first_step: str) -> list[str]:
+    """给出"写入落点被拒"时的下一步动作清单
+
+    与 write_target_denied() 放在同一处：判定和出路本就是一件事，
+    各调用点各内联一份时，改了文案的那一处会和其余几处静默不一致。
+    只有首条动作因调用场景而异（init_config 可改 target，save_config 只能迁文件），
+    其余两条恒定。
+
+    Args:
+        first_step: 该调用场景下最直接的出路，作为清单首条
+
+    Returns:
+        三条可执行动作组成的列表
+
+    Example:
+        >>> len(write_target_denied_steps("改用 target='user'"))
+        3
+    """
+    return [
+        first_step,
+        f"或在客户端 mcp.json 的 env 中把目标目录追加到 {CONFIG_ROOTS_ENV_VAR}",
+        "调用 where_config 查看当前允许的根目录列表",
+    ]
 
 
 def resolve_config_path(config_path: str = "") -> str:

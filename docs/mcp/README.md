@@ -28,7 +28,7 @@ Jenkins MCP Server 将 Jenkins 自动构建 CLI 工具的能力暴露为 [Model 
 - **Python 3.10+** 和 [uv](https://docs.astral.sh/uv/) 包管理器（仅源码 / 控制台入口方式需要；走 §3.2 的 npx 方式时不需要）
 - **mcp 可选依赖**：`mcp[cli]>=1.25.0,<2.0.0`（pyproject.toml 中的 `mcp` extra，安装方式见 §3.5）
 - **Node.js 18+**（仅 §3.2 的 npx 方式需要，此时无需 Python）
-- **配置文件**：探测链上任一目录中存在 `jenkins-config.yaml` / `jenkins-config.yml` / `jenkins-config.json`——源码模式为项目根 → CWD → 用户级配置目录，EXE 模式为 CWD → exe 目录 → 用户级配置目录；也可用 `JENKINS_MCP_CONFIG` 给绝对路径（放置建议见 §3.7，完整规则见 §7.1）。没有配置文件时可直接调 `init_config` 生成模板（见 §3.9）
+- **配置文件**：探测链上任一目录中存在 `jenkins-config.yaml` / `jenkins-config.yml` / `jenkins-config.json`——每个目录都先看其 `.jenkins-config/` 子目录再看目录本身，源码模式为 项目根/.jenkins-config → 项目根 → CWD/.jenkins-config → CWD → 用户级配置目录，EXE 模式把前两组换成 CWD 与 exe 目录；也可用 `JENKINS_MCP_CONFIG` 给绝对路径（放置建议见 §3.7，完整规则见 §7.1）。没有配置文件时可直接调 `init_config` 生成模板（见 §3.9）
 - **Jenkins 服务器可达**：MCP Server 需要能够访问配置中的 Jenkins 实例
 
 ---
@@ -126,7 +126,11 @@ $env:JENKINS_MCP_ALLOW_WRITE = "1"
 | Claude Desktop | macOS `~/Library/Application Support/Claude/claude_desktop_config.json`、Windows `%APPDATA%\Claude\claude_desktop_config.json` | 与 Claude Code 互不相通 |
 | Cursor | 项目内 `.cursor/mcp.json`，或全局 `~/.cursor/mcp.json` | |
 | VS Code (Copilot) | 项目内 `.vscode/mcp.json` | 顶层键是 `servers`，不是 `mcpServers` |
+| Codex CLI | `~/.codex/config.toml`，或受信任项目的 `.codex/config.toml` | TOML 格式，表名是 `mcp_servers`；CLI 与 IDE 扩展共用 |
+| OpenCode | `~/.config/opencode/opencode.json`，或项目根的 `opencode.json` | 顶层键 `mcp`，环境变量键名是 `environment` |
+| Pi | 项目根 `.mcp.json`，或全局 `~/.pi/agent/mcp.json` | 内核不带 MCP，需先装 `pi-mcp-adapter` |
 | MCP Inspector | 无配置文件，界面上填 | 变量填在 Environment Variables 面板 |
+
 
 #### Claude Code
 
@@ -212,7 +216,53 @@ claude mcp remove jenkins-build
 
 VS Code 的 Agent Host 不直接读 `.vscode/mcp.json`；需要跨工具通用时，改放工作区 `.mcp.json` 或 `~/.copilot/mcp-config.json`。
 
+#### Codex CLI
+
+配置写在 `~/.codex/config.toml`，用 TOML 而非 JSON，表名是 `mcp_servers`（下划线）。放到受信任项目的 `.codex/config.toml` 可做项目级限定，CLI 与 IDE 扩展共用这份配置：
+
+```toml
+[mcp_servers.jenkins-build]
+command = "npx"
+args = ["-y", "@zythegit/jenkins-config-mcp"]
+env = { JENKINS_MCP_ALLOW_WRITE = "1" }
+```
+
+也可以用命令登记，效果相同；TUI 里用 `/mcp` 查看已连接的服务器：
+
+```bash
+codex mcp add jenkins-build --env JENKINS_MCP_ALLOW_WRITE=1 -- npx -y @zythegit/jenkins-config-mcp
+```
+
+#### OpenCode
+
+配置在 `~/.config/opencode/opencode.json`（或项目根的 `opencode.json`）的 `mcp` 键下。环境变量的键名是 `environment`，**不是** `env`：
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "jenkins-build": {
+      "type": "local",
+      "command": ["npx", "-y", "@zythegit/jenkins-config-mcp"],
+      "environment": { "JENKINS_MCP_ALLOW_WRITE": "1" },
+      "enabled": true
+    }
+  }
+}
+```
+
+#### Pi
+
+Pi 内核刻意不内置 MCP，需要先装社区适配器并重启 Pi：
+
+```bash
+pi install npm:pi-mcp-adapter
+```
+
+适配器读取标准的 `.mcp.json`（项目根）或全局 `~/.pi/agent/mcp.json`，格式与 §3.2 那段 `mcpServers` 完全一致，直接复制即可。装好后用 `/mcp` 面板查看连接状态。
+
 #### MCP Inspector
+
 
 Inspector 没有配置文件，Command 填 `npx`、Arguments 填 `-y @zythegit/jenkins-config-mcp`。变量要在左侧 **Environment Variables** 面板里 Add（Key `JENKINS_MCP_ALLOW_WRITE`、Value `1`），填完 Disconnect 再 Connect 才生效——终端里 export 同样无效，理由见 §3.3。
 
@@ -506,7 +556,7 @@ npx 用户装完之后没有任何配置文件，从零到 `list_environments` �
 - `source` — 路径来源：`explicit_arg`（显式传参）/ `env_var`（`JENKINS_MCP_CONFIG` 生效）/ `probed`（候选目录命中）/ `fallback`（都没命中，退回首个候选）
 - `env_var` — `{name, value, effective}`：变量名恒为 `JENKINS_MCP_CONFIG`，`effective` 说明它这次是否真正生效（传了相对路径或同时给了 `config_path` 时为 `false`）
 - `mode` — 运行模式 `source` / `frozen`
-- `search_bases` — 候选目录明细，每项含 `base`（被跳过时为 `null`）、`order`（从 1 递增）、`kind`（`project_root` / `cwd` / `exe_dir` / `user_config_dir`）、`exists`、`matched_file`（命中的配置文件，未命中为空串）、`skipped_reason`（`''` / `home_unavailable` / `too_broad`）、`allowed`（是否在白名单允许范围内）
+- `search_bases` — 候选目录明细，每项含 `base`（被跳过时为 `null`）、`order`（从 1 递增）、`kind`（`project_root_app_dir` / `project_root` / `cwd_app_dir` / `cwd` / `exe_dir_app_dir` / `exe_dir` / `user_config_dir`，带 `_app_dir` 后缀的是该目录下的 `.jenkins-config` 子目录）、`exists`、`matched_file`（命中的配置文件，未命中为空串）、`skipped_reason`（`''` / `home_unavailable` / `too_broad`）、`allowed`（是否在白名单允许范围内）
 - `candidate_file_names` — 探测用的文件名顺序
 - `history_path` — 对应的构建历史文件路径（**仅当 `path_allowed=true` 时才返回该键**）
 - `allowed_config_bases` — 当前允许读写配置的根目录列表（即 `config_path` 白名单）
@@ -637,19 +687,19 @@ npx 用户装完之后没有任何配置文件，从零到 `list_environments` �
 |------|------|------|------|
 | `config_path` | `str` | 否 | 配置文件路径，为空时自动检测 |
 
-**返回值：** `dict` — 成功时包含 `message`（`配置已保存`）、`path`（文件路径）和 `backup`（备份路径，原文件不存在时为空字符串；`.bak` 已存在时退化为 `<名字>.<时间戳>.bak`，与 `init_config` 共用 `backup_config_file()`）；失败时返回统一失败载荷（顶层 `error_code` / `error` / `config_path` / `next_steps` / `docs`），未开写门控为 `write_not_allowed`、非 YAML 路径为 `invalid_target`。
+**返回值：** `dict` — 成功时包含 `message`（`配置已保存`）、`path`（文件路径）和 `backup`（备份路径，原文件不存在时为空字符串；`.bak` 已存在时退化为 `<名字>.<时间戳>.bak`，与 `init_config` 共用 `backup_config_file()`）；失败时返回统一失败载荷（顶层 `error_code` / `error` / `config_path` / `next_steps` / `docs`），未开写门控为 `write_not_allowed`、非 YAML 路径为 `invalid_target`、落点挂在过宽宿主目录下（如 `<盘符根>/.jenkins-config/`）为 `config_path_denied`（与 `init_config` 共用 `write_target_denied()`）。
 
 ---
 
 #### `init_config`
 
-在用户级目录或当前工作目录生成配置模板，供"什么都没配"的场景起步（零配置流程见 §3.9）。模板中的 `server.url` / `server.token` **恒为占位符**，绝不从环境变量或其它配置文件推断真实凭据。
+在用户级目录或当前工作目录的 `.jenkins-config/` 下生成配置模板，供"什么都没配"的场景起步（零配置流程见 §3.9）。模板中的 `server.url` / `server.token` **恒为占位符**，绝不从环境变量或其它配置文件推断真实凭据。
 
 参数：
 
 - `target`（`str`，否）— 写入位置，默认 `user`。**只接受 `user` / `cwd` 两个枚举值，不接受任意路径**：路径参数由调用方可控，等于把"往哪写文件"的决定权交出去
   - `user` → `~/.jenkins-config/jenkins-config.yaml`
-  - `cwd` → MCP Server 进程当前工作目录下的 `jenkins-config.yaml`
+  - `cwd` → `<MCP Server 进程当前工作目录>/.jenkins-config/jenkins-config.yaml`；落在点目录里而非目录顶层，是为了与用户级目录同构（配置、`data/`、`.bak` 收在一处），且该子目录是探测链首位，生成即可被读到
 - `overwrite`（`bool`，否）— 默认 `false`；为 `true` 时允许覆盖已存在的配置（需先开写门控）
 - `format`（`str`，否）— 模板格式，本版本仅支持 `yaml`。取值在**任何写入之前**校验（忽略大小写与首尾空格），非法取值直接返回 `invalid_target` 且不落任何文件——否则 `format='json'` 会把 JSON 内容写进 `jenkins-config.yaml`
 
@@ -658,13 +708,14 @@ npx 用户装完之后没有任何配置文件，从零到 `list_environments` �
 
 - 目标文件不存在 + `overwrite=false`（默认）→ **直接创建，不需要** `JENKINS_MCP_ALLOW_WRITE`。门控保护的是既有资产，而这里的目标尚不存在；强制门控会让零配置用户从 1 步变 3 步（改 `mcp.json` → 重启客户端 → 再调用），最短上手路径直接失效
 - 目标文件已存在 + `overwrite=false` → 一律返回 `error_code: config_exists` 且**不做任何改动**，与门控状态无关。默认调用永远不可能损坏已有配置
+- 目标文件不存在，但生成后会**顶掉**另一份已生效的配置（典型场景：同目录顶层已有填好真实 token 的 `jenkins-config.yaml`，而点目录排在它前面）→ 同样返回 `config_exists`，`error` 中给出被遮蔽的路径。文件虽未被改动，但再没有人读它，连带 `data/build_history.json` 也一起失效，与"损坏"没有区别；判定按探测顺序比优先级，因此 `target='user'`（末位）不会因项目级配置存在而被拦
 - `overwrite=true` → 视为改动既有资产，**必须** `JENKINS_MCP_ALLOW_WRITE=1`，否则返回 `write_not_allowed`。放行后在**同一个** `file_lock(required=True)` 临界区内依次完成"复查目标是否存在 → 复制为 `.bak` → `atomic_write` 落盘"（与 `save_config` 共用 `backup_config_file()`，避免 CLI 与 MCP 并发写互相截断）。`.bak` 已被占用时退化为 `<名字>.<时间戳>.bak`：固定名意味着第二次覆写会把上一份备份也换成模板，而配置里往往就是唯一一份可用凭据
 
-- `target='cwd'` 但该目录过宽（盘符 / 文件系统根，或家目录本身）→ 返回 `config_path_denied`，并给出两条出路：改用 `target='user'`，或把该目录追加到 `JENKINS_MCP_CONFIG_ROOTS`
+- `target='cwd'` 但当前工作目录过宽（盘符 / 文件系统根）→ 返回 `config_path_denied`，并给出两条出路：改用 `target='user'`，或把目标目录追加到 `JENKINS_MCP_CONFIG_ROOTS`；若此时 HOME / USERPROFILE 也缺失（`target='user'` 同样走不通），归为 `home_unavailable`。CWD 恰为家目录时不拒绝：此时目标就是 `~/.jenkins-config`，与 `target='user'` 完全重合。该判定（`utils.write_target_denied()`）是**写入落点**策略，`save_config` 也调用同一个函数，避免"init 拒写、save 放行"两条不一致的写边界
 
 **返回值：** `dict`
 
-- 成功：`created: true`、`path`（绝对路径）、`format`、`backup`（未覆盖时为空串）、`template_fields`（字段清单，每项含 `key` / `description` / `required`，与 CLI 的 `--init` 说明同源）、`next_steps`（填字段 → 调 `doctor` → 调 `list_environments`）
+- 成功：`created: true`、`path`（绝对路径）、`format`、`backup`（未覆盖时为空串）、`shadowed_path`（被本次生成顶掉的配置路径，无则为空串）、`template_fields`（字段清单，每项含 `key` / `description` / `required`，与 CLI 的 `--init` 说明同源）、`next_steps`（填字段 → 调 `doctor` → 调 `list_environments`）
 - 失败：`created: false`、`path`，以及统一失败载荷的五个字段。可能的错误码为 `invalid_target`（`target` / `format` 非法）、`home_unavailable`（`target='user'` 但 HOME / USERPROFILE 缺失）、`config_path_denied`、`config_exists`、`write_not_allowed`、`config_permission_denied`（目录不可写 / 锁等待超时）
 
 生成后必须由用户本人把 `server.url`、`server.token` 改为真实取值——token 属于凭据，不应由客户端代填或猜测。
@@ -726,7 +777,7 @@ MCP Prompts 提供预定义的交互流程模板，帮助 AI Agent 引导用户�
 
 1. 调 `doctor` 做本地体检，确认卡在哪一层（配置是否存在、是否填完、写开关状态）
 2. 调 `where_config` 查看候选目录顺序与本次会读到的路径
-3. 配置文件不存在时调 `init_config` 生成模板（默认写入 `~/.jenkins-config`，需要放当前工作目录时传 `target='cwd'`）；返回 `config_exists` 说明已有配置，不要覆盖，回到第 2 步确认路径
+3. 配置文件不存在时调 `init_config` 生成模板（默认写入 `~/.jenkins-config`，需要放当前工作目录时传 `target='cwd'`，落点为 `<CWD>/.jenkins-config/`，记得把该目录加进 `.gitignore`）；返回 `config_exists` 说明已有配置，不要覆盖，回到第 2 步确认路径
 4. **由用户本人**打开返回的 `path`，把 `server.url` / `server.token` 从占位符改成真实取值，并按 `template_fields` 中 `required` 的字段补齐 `environments`——这一步刻意停下来等人，token 属于凭据，不代填也不猜测
 5. 调 `list_environments` 验证；仍失败则按返回体的 `error_code` / `next_steps` 继续处理
 
@@ -742,12 +793,14 @@ MCP Prompts 提供预定义的交互流程模板，帮助 AI Agent 引导用户�
 |--------|------|
 | 1 | 显式传入的 `config_path`（绝对路径原样使用；相对路径按候选目录锚定） |
 | 2 | 环境变量 `JENKINS_MCP_CONFIG` 指向的文件，**只接受绝对路径**，相对值记 warning 后忽略；仅 MCP Server 生效 |
-| 3（源码模式） | 依次探测 项目根目录 → 进程当前工作目录 → 用户级配置目录 |
-| 3（EXE 冻结模式） | 依次探测 进程当前工作目录 → exe 所在目录 → 用户级配置目录 |
+| 3（源码模式） | 依次探测 项目根/.jenkins-config → 项目根 → CWD/.jenkins-config → CWD → 用户级配置目录 |
+| 3（EXE 冻结模式） | 依次探测 CWD/.jenkins-config → CWD → exe 目录/.jenkins-config → exe 目录 → 用户级配置目录 |
 | 支持文件名 | `jenkins-config.yaml` / `jenkins-config.yml` / `jenkins-config.json`（与 CLI 一致） |
-| 均未找到 | 返回首个候选目录下的 `jenkins-config.yaml`（后续加载时报"配置文件不存在"） |
+| 均未找到 | 返回首个候选目录（源码模式为 `项目根/.jenkins-config`）下的 `jenkins-config.yaml`（后续加载时报"配置文件不存在"） |
 
 候选目录末位固定为用户级配置目录：MCP Server 由客户端以 stdio 拉起，CWD 可能是 `/` 或家目录，只靠项目根 / CWD / exe 目录探测不可靠。
+
+每个目录的 `.jenkins-config/` 子目录排在该目录本身之前：子目录只可能是 `init_config` / CLI `--init` 显式创建出来的，而目录顶层那份可能只是历史遗留；这样项目级布局（`<项目根>/.jenkins-config/` 里放配置 + `data/`）与用户级 `~/.jenkins-config/` 完全同构，加 `.gitignore` 也只需一条。顶层候选一并保留，既有部署不受影响。
 
 因此：
 
@@ -777,7 +830,7 @@ MCP Prompts 提供预定义的交互流程模板，帮助 AI Agent 引导用户�
 | `JENKINS_MCP_ALLOW_WRITE` | 未设置（只读） | 设为 `1`/`true`/`yes`/`on` 才允许写操作（`trigger_build`、`rebuild_last`、`save_config`）；未设置时这些工具直接返回 `write_not_allowed` 载荷，其余只读工具不受影响。`init_config` 为分级门控：仅在 `overwrite=true`（覆盖已有配置）时要求该变量，创建新文件不要求（见 §4.2） |
 | `JENKINS_MCP_ALLOWED_HOSTS` | 未设置 | 逗号分隔的主机白名单，用于放行 `rebuild_last` 直连模式的 `jenkins_url`。**一旦设置即为唯一权威来源**，不再叠加配置文件中的主机（否则客户端只要在自己的 CWD 放一份 `jenkins-config.yaml` 就能扩大白名单）；未设置时退回**自动探测到的**配置文件中 `server.url` 的同一 host（不采用调用方传入的 `config_path`）；两者都取不到时任何 `jenkins_url` 都会被拒绝 |
 | `JENKINS_MCP_CONFIG` | 未设置 | 直接指定配置文件路径，**优先于探测规则，且只对 MCP Server 生效**（CLI 的自动探测不读它，避免为客户端导出该变量后连 `jenkins-build` 的行为一起改掉）。**只接受绝对路径**：相对值仍受 CWD 影响，会记一条 warning 后按未设置处理。该变量由部署方设定，属可信来源，其指向的**那一个文件**自动放行；父目录不整树进入白名单 |
-| `JENKINS_MCP_CONFIG_ROOTS` | 未设置 | `os.pathsep` 分隔的目录白名单，用于扩展允许读写的配置文件根目录。默认只允许 `paths.search_bases()`（项目根 / CWD / exe 目录 / 用户级配置目录）之内的路径；调用方传入的 `config_path` 解析后若落在白名单之外，直接抛 `PermissionError`，避免用自带配置绕过主机白名单或让 `save_config` 覆写任意 YAML |
+| `JENKINS_MCP_CONFIG_ROOTS` | 未设置 | `os.pathsep` 分隔的目录白名单，用于扩展允许读写的配置文件根目录。默认只允许 `paths.search_bases()`（项目根 / CWD / exe 目录，各含其 `.jenkins-config` 子目录 / 用户级配置目录）之内的路径；调用方传入的 `config_path` 解析后若落在白名单之外，直接抛 `PermissionError`，避免用自带配置绕过主机白名单或让 `save_config` 覆写任意 YAML |
 | `JENKINS_MCP_LOG_LEVEL` | `WARNING` | 根 logger 级别，取值限于 `DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL`；其它值一律退回 `WARNING` |
 | `JENKINS_MCP_LOG_FILE` | 未设置（只输出 stderr） | 文件日志路径；设为 `auto`（或 `1`/`true`/`yes`/`on`）时落到用户级日志目录的 `jenkins-config-mcp.<pid>.log`——每个客户端各自拉起一个 Server 进程，文件名带进程号才能避免多进程共写同一文件时轮转失败。轮转策略 1 MB × 3 份；目录不可写时降级为仅 stderr，不影响启动 |
 
@@ -797,7 +850,7 @@ stdout 是 JSON-RPC 通道，**日志一律走 stderr**，客户端会自行落�
 
 按平台分散到 `%LOCALAPPDATA%` / `~/Library/Application Support` / `~/.config` 更合系统惯例，但要三行才说得清，而且配置目录与数据目录在 Windows、macOS 上重合、只在 Linux 上分开，反而多出一类平台差异。这里选可发现性，代价是不再尊重 `XDG_CONFIG_HOME`。
 
-配置文件解析优先级：显式参数 `config_path` → `JENKINS_MCP_CONFIG`（仅 MCP，绝对路径）→ 候选目录探测（源码模式 `项目根 → CWD → 用户配置目录`，EXE 模式 `CWD → exe 目录 → 用户配置目录`）。
+配置文件解析优先级：显式参数 `config_path` → `JENKINS_MCP_CONFIG`（仅 MCP，绝对路径）→ 候选目录探测（源码模式 `项目根/.jenkins-config → 项目根 → CWD/.jenkins-config → CWD → 用户配置目录`，EXE 模式把前两组换成 `CWD` 与 `exe 目录`）。
 
 构建历史统一写在配置文件同级的 `data/build_history.json`。走 npx 时配置在 `~/.jenkins-config/`，历史就落在 `~/.jenkins-config/data/`，与带版本号的 npx 缓存目录（`~/.cache/jenkins-config-mcp/<tag>/`）无关，升级换目录不会丢历史。
 
@@ -821,7 +874,7 @@ stdout 是 JSON-RPC 通道，**日志一律走 stderr**，客户端会自行落�
 - `config_permission_denied` — 来源 `read` 阶段的 `OSError`（含 Windows 对目录抛的 `PermissionError` 与 Linux 的 `IsADirectoryError`，以及 `init_config` 写入失败 / 锁超时）。方向：确认是文件而非目录 → 补齐读（写）权限后调 `doctor` 复查
 - `config_incomplete` — 来源以 `配置错误: ` 开头的 `ValueError`、项目缺 `name` 的 `KeyError`，以及占位符未替换。方向：把 `server.url` / `server.token` 改为真实取值 → 调 `doctor` 确认 `config_complete` 变 ok
 - `home_unavailable` — 来源 `RuntimeError`（HOME / USERPROFILE 均缺失，`Path.home()` 失败）。方向：设置 HOME（Windows 为 USERPROFILE）→ 或用 `JENKINS_MCP_CONFIG` 绕开用户级目录（`init_config` 另给出 `target='cwd'`）
-- `config_exists` — `init_config` 目标已存在且 `overwrite=false`（未做任何改动）。方向：调 `where_config` 看现有配置 → 确需覆盖时传 `overwrite=true` 并先开写门控
+- `config_exists` — `init_config` 目标已存在且 `overwrite=false`（未做任何改动），或目标虽不存在但生成后会顶掉另一份已生效的配置（`error` 里给出被遮蔽的路径）。方向：调 `where_config` 看现有配置 → 直接编辑它 → 确需覆盖 / 改用新位置时传 `overwrite=true` 并先开写门控
 - `write_not_allowed` — 未设 `JENKINS_MCP_ALLOW_WRITE`（`trigger_build` / `rebuild_last` / `save_config`，以及 `init_config` 的覆盖分支）。方向：在客户端 `env` 中设 `JENKINS_MCP_ALLOW_WRITE=1` → 重启 Server 后重试
 - `invalid_target` — 入参取值不合法：环境名为空、环境下无匹配项目、`params` 解析失败、`jenkins_url` 不在主机白名单、历史无可重建记录、`save_config` 非 YAML 路径、`init_config` 的 `target` / `format` 非法。方向：先用 `list_environments` / `list_projects` / `show_history` 确认可用取值，再用确认后的取值重调
 - `unknown_error` — 兜底码，给不属于上面任何一类的失败（历史文件损坏、Jenkins 网络异常等）。方向：调 `doctor` 拿完整体检 → 看 stderr 日志（可设 `JENKINS_MCP_LOG_LEVEL=DEBUG`）
