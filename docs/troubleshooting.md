@@ -51,6 +51,7 @@ JENKINS_MCP_LAUNCHER_DRYRUN=1 npx -y @zythegit/jenkins-config-mcp
 - **`npm error 404 Not Found ... @zythegit/jenkins-config-mcp`** — npm 包尚未发布，或用了错误的包名（注意有 `@zythegit/` 前缀）
 - **sha256 校验失败** — 下载被中间层篡改或 Release 资产被替换；不要用 `JENKINS_MCP_SKIP_CHECKSUM=1` 绕过，先确认来源
 - **下载 404** — 目标 tag 的 Release 不存在该平台资产，用 `JENKINS_MCP_VERSION` 显式指定一个存在的 tag
+- **`Error: spawn EINVAL`** — Node 18.20 / 20.12 起（CVE-2024-27980 加固）禁止在 `shell: false` 下直接 spawn `.cmd` / `.bat`，而 pip / npm 在 Windows 生成的 `jenkins-config-mcp` shim 常常就是 `.cmd`。启动器已改为遇到批处理时经 `cmd.exe /d /s /c` 转发（自检输出里的 `via_cmd` 字段可看到），仍报此错说明用的是旧版本，升级 npm 包即可
 - **macOS 提示无法验证开发者** — 二进制未签名公证，`xattr -d com.apple.quarantine <缓存路径>` 后重试
 
 其余环境变量与解析顺序见 [MCP Server 文档](mcp/README.md)。

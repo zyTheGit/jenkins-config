@@ -81,6 +81,69 @@ function which(name) {
 }
 
 /**
+ * 判断命令是否是 Windows 批处理脚本（.cmd / .bat）。
+ *
+ * Node 18.20 / 20.12 起（CVE-2024-27980 加固）不再允许在 shell: false 下
+ * 直接 spawn 批处理文件，会同步抛出 EINVAL。而 pip / npm 在 Windows 上
+ * 生成的 console script shim 经常就是 .cmd，兜底分支正好会命中它。
+ *
+ * @param {string} command 待执行的命令路径
+ * @returns {boolean} 是批处理脚本则 true
+ */
+function isBatchScript(command) {
+  return process.platform === 'win32' && /\.(cmd|bat)$/i.test(command);
+}
+
+/**
+ * 转义交给 cmd.exe 的命令路径。
+ *
+ * 走 cmd.exe 是被迫的（批处理只能由它解释），因此必须自己把元字符挡掉，
+ * 不能让路径里的 `&` `^` 之类被当成命令分隔符。
+ *
+ * @param {string} value 命令路径
+ * @returns {string} 转义后的命令
+ */
+function escapeCmdCommand(value) {
+  return String(value).replace(/([()\][%!^"`<>&|;, *?])/g, '^$1');
+}
+
+/**
+ * 转义交给 cmd.exe 的单个参数。
+ *
+ * 先按 Windows 的 argv 规则处理反斜杠与引号，再包引号，最后转义 cmd 元字符；
+ * 元字符转义做两遍 —— 批处理里的 `%*` 会被 cmd 二次解析，只转一遍在 shim
+ * 展开参数时又会被吃掉一层。
+ *
+ * @param {string} value 参数原文
+ * @returns {string} 转义后的参数
+ */
+function escapeCmdArgument(value) {
+  let arg = String(value);
+  arg = arg.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"');
+  arg = arg.replace(/(?=(\\+?)?)\1$/, '$1$1');
+  arg = `"${arg}"`;
+  return arg
+    .replace(/([()\][%!^"`<>&|;, *?])/g, '^$1')
+    .replace(/([()\][%!^"`<>&|;, *?])/g, '^$1');
+}
+
+/**
+ * 把批处理命令包装成一次 cmd.exe 调用。
+ *
+ * 不用 spawn 的 shell: true —— Node 24 起那条路径会打印 DEP0190 弃用警告，
+ * 且由 Node 拼接命令行时不会转义参数。这里自己拼好并置
+ * windowsVerbatimArguments，告诉 Node 命令行已经转义完毕。
+ *
+ * @param {string} command 批处理脚本路径
+ * @param {string[]} args 传给脚本的参数
+ * @returns {{command: string, args: string[]}} cmd.exe 调用形式
+ */
+function wrapForCmd(command, args) {
+  const line = [escapeCmdCommand(command)].concat(args.map(escapeCmdArgument)).join(' ');
+  return { command: process.env.COMSPEC || 'cmd.exe', args: ['/d', '/s', '/c', `"${line}"`] };
+}
+
+/**
  * 当前平台对应的 Release 资产名。
  *
  * @returns {string} 资产文件名
@@ -282,18 +345,28 @@ async function main() {
   }
 
   const args = resolved.args.concat(process.argv.slice(2));
+  // 只有批处理 shim 才绕 cmd.exe —— 二进制与 python.exe 继续直接 spawn，
+  // 不让用户参数经过命令行解析器
+  const viaCmd = isBatchScript(resolved.command);
+  const launch = viaCmd ? wrapForCmd(resolved.command, args) : { command: resolved.command, args };
 
   if (process.env.JENKINS_MCP_LAUNCHER_DRYRUN) {
     process.stdout.write(
-      JSON.stringify({ source: resolved.source, command: resolved.command, args }) + '\n'
+      JSON.stringify({
+        source: resolved.source,
+        command: resolved.command,
+        args,
+        via_cmd: viaCmd,
+      }) + '\n'
     );
     return;
   }
 
-  const child = spawn(resolved.command, args, {
+  const child = spawn(launch.command, launch.args, {
     stdio: 'inherit',
     shell: false,
     windowsHide: true,
+    windowsVerbatimArguments: viaCmd,
   });
 
   child.on('error', (err) => {
