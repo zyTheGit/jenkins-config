@@ -25,3 +25,33 @@ def allow_tmp_config_roots(monkeypatch, tmp_path_factory):
         CONFIG_ROOTS_ENV_VAR, str(tmp_path_factory.getbasetemp())
     )
 
+
+@pytest.fixture
+def usable_config(tmp_path):
+    """写一份填写完整的配置文件，但不生成任何历史文件
+
+    放在 conftest 里共享：多个测试文件都需要"配置可用"这个前提，
+    各自复制一份 YAML 会让"什么算完整配置"出现两份定义。
+
+    Returns:
+        配置文件的绝对路径字符串
+
+    Example:
+        >>> usable_config  # doctest: +SKIP
+        '/tmp/pytest-xxx/jenkins-config.yaml'
+    """
+    config = tmp_path / "jenkins-config.yaml"
+    config.write_text(
+        "server:\n"
+        "  url: http://jenkins.example.com\n"
+        "  username: admin\n"
+        "  token: real-token-value\n"
+        "environments:\n"
+        "  dev:\n"
+        "    description: 开发环境\n"
+        "    projects:\n"
+        "      - name: project-a\n",
+        encoding="utf-8",
+    )
+    return str(config)
+

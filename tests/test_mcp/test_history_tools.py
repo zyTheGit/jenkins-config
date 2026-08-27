@@ -14,11 +14,25 @@ from unittest.mock import Mock, patch
 import pytest
 
 from jenkins_config.history import BuildRecord
+from jenkins_config.mcp.utils import CONFIG_ENV_VAR
 
 
 # ============================================================================
 # Fixtures
 # ============================================================================
+
+
+@pytest.fixture(autouse=True)
+def anchor_config(monkeypatch, usable_config):
+    """把配置锚定到临时目录里的一份完整配置
+
+    show_history / show_history_stats 会先跑 _config_gate 探测配置，配置不可用
+    时直接短路成失败载荷，下面 mock 的 HistoryManager 根本不会被调用到。
+    仓库根目录那份 jenkins-config.yaml 是 git-ignored 的本地文件，CI 上并不存在，
+    不锚定的话同一批用例在本地全绿、在 CI 全红。
+    配置不可用时的短路行为由 test_failure_payload_contract.py 覆盖。
+    """
+    monkeypatch.setenv(CONFIG_ENV_VAR, usable_config)
 
 
 @pytest.fixture

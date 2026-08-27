@@ -30,25 +30,6 @@ def missing_config(tmp_path):
     return str(tmp_path / "nope" / "jenkins-config.yaml")
 
 
-@pytest.fixture
-def usable_config(tmp_path):
-    """写一份填写完整的配置文件，但不生成任何历史文件"""
-    config = tmp_path / "jenkins-config.yaml"
-    config.write_text(
-        "server:\n"
-        "  url: http://jenkins.example.com\n"
-        "  username: admin\n"
-        "  token: real-token-value\n"
-        "environments:\n"
-        "  dev:\n"
-        "    description: 开发环境\n"
-        "    projects:\n"
-        "      - name: project-a\n",
-        encoding="utf-8",
-    )
-    return str(config)
-
-
 @pytest.mark.parametrize("tool", [list_environments, list_projects])
 def test_list_tools_return_single_pure_payload(tool, missing_config):
     """验证 list 型 tool 失败时返回单元素纯载荷，且不含伪业务字段"""
