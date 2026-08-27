@@ -226,7 +226,6 @@ def test_load_queue_timeout_custom(tmp_path):
     assert d["build"]["queue_timeout"] == 120
 
 
-
 def test_load_project_without_path(tmp_path):
     """项目无 path 时使用 name 作为 path"""
     config_file = tmp_path / "test.yaml"
@@ -261,3 +260,146 @@ def test_load_unknown_suffix_fallback_json(tmp_path):
     config_file.write_text("""{"server": {"url": "http://localhost:8080", "token": "t"}, "environments": {}}""", encoding="utf-8")
     config = Config.load(str(config_file))
     assert config.server.url == "http://localhost:8080"
+
+
+# ============================================================================
+# 模板占位符与判据同源（防漂移）
+# ============================================================================
+
+
+def test_template_uses_placeholder_values():
+    """模板的 server.url / server.token 必须恒等于 PLACEHOLDER_VALUES
+
+    doctor 的 config_complete 靠占位符比对判断"配置填过没有"。若模板改了字面量
+    而判据没跟着改，一份从未填写的配置会被报成"已完成"——比没有这项检查更糟。
+    """
+    from jenkins_config.config_io import PLACEHOLDER_VALUES, generate_template
+
+    template = generate_template()
+
+    assert template["server"]["url"] == PLACEHOLDER_VALUES["server.url"]
+    assert template["server"]["token"] == PLACEHOLDER_VALUES["server.token"]
+
+
+def test_placeholder_values_keys_are_dotted_paths():
+    """占位符键名是配置内的点分路径，便于直接回报给用户"""
+    from jenkins_config.config_io import PLACEHOLDER_VALUES
+
+    assert set(PLACEHOLDER_VALUES) == {"server.url", "server.token"}
+    for value in PLACEHOLDER_VALUES.values():
+        assert value.strip(), "占位符必须非空，否则会被 _validate_config 直接拒掉"
+
+
+def test_placeholder_template_passes_validation(tmp_path):
+    """模板占位符能通过必填校验：这正是"必须靠占位符比对"的原因"""
+    from jenkins_config.config_io import generate_template
+
+    config_file = tmp_path / "jenkins-config.yaml"
+    config_file.write_text(
+        yaml.safe_dump(generate_template(), allow_unicode=True), encoding="utf-8"
+    )
+
+    config = Config.load(str(config_file))
+
+    assert config.server.url and config.server.token
+
+
+def test_validation_error_prefix_is_shared():
+    """必填校验的错误前缀取自共用常量（mcp/errors.classify 依赖它分流）"""
+    from jenkins_config.config_io import VALIDATION_ERROR_PREFIX, _validate_config
+
+    with pytest.raises(ValueError) as exc_info:
+        _validate_config(ServerConfig(url="", username="admin", token="t"))
+
+    assert str(exc_info.value).startswith(VALIDATION_ERROR_PREFIX)
+
+
+# ============================================================================
+# T-08 / T-09：模板字段清单与模板文本
+# ============================================================================
+
+
+def test_template_fields_marks_required_keys():
+    """必填项须覆盖 server.url / server.token / environments"""
+    from jenkins_config.config_io import template_fields
+
+    fields = template_fields()
+    required = {item["key"] for item in fields if item["required"]}
+
+    assert {"server.url", "server.token", "environments"} <= required
+    for item in fields:
+        assert set(item) == {"key", "description", "required"}
+        assert item["description"].strip()
+
+
+def test_template_fields_share_source_with_show_template(capsys):
+    """字段清单与 CLI 的 show_template 输出同源（文案不许各写一套）"""
+    from jenkins_config.config_io import show_template, template_fields
+
+    show_template()
+    out = capsys.readouterr().out
+
+    for item in template_fields():
+        assert item["key"] in out
+        assert item["description"] in out
+
+
+def test_template_text_yaml_round_trips():
+    """template_text('yaml') 带注释头，且可被 yaml.safe_load 回读"""
+    from jenkins_config.config_io import PLACEHOLDER_VALUES, template_text
+
+    text = template_text("yaml")
+    data = yaml.safe_load(text)
+
+    assert text.lstrip().startswith("#")
+    assert data["server"]["url"] == PLACEHOLDER_VALUES["server.url"]
+    assert data["server"]["token"] == PLACEHOLDER_VALUES["server.token"]
+    assert set(data["environments"]) == {"dev", "prod"}
+
+
+def test_template_text_json_round_trips():
+    """template_text('json') 不带注释，可被 json.loads 回读"""
+    import json
+
+    from jenkins_config.config_io import generate_template, template_text
+
+    assert json.loads(template_text("json")) == generate_template()
+
+
+def test_template_text_rejects_unknown_format():
+    """非法 fmt 抛 ValueError（由 MCP 侧折算为结构化载荷）"""
+    from jenkins_config.config_io import template_text
+
+    with pytest.raises(ValueError, match="不支持的模板格式"):
+        template_text("toml")
+
+
+def test_template_text_never_reads_example_files(monkeypatch):
+    """模板内容来自 dict 常量，绝不读源码树里的示例文件
+
+    npx / 单文件 EXE 形态下没有源码树，读示例文件会在真实部署时直接报错。
+    这里把 Path.read_text 打成炸弹，一旦有人改成"读文件"实现立即失败。
+    """
+    from jenkins_config.config_io import template_text
+
+    def _boom(*args, **kwargs):
+        """任何文件读取都视为违反约束"""
+        raise AssertionError("template_text 不应读取任何文件")
+
+    monkeypatch.setattr(Path, "read_text", _boom)
+    monkeypatch.setattr(Path, "read_bytes", _boom)
+
+    assert template_text("yaml")
+    assert template_text("json")
+
+
+def test_template_text_output_is_loadable_as_config(tmp_path):
+    """生成的 YAML 文本落盘后能被 Config.load 直接加载"""
+    from jenkins_config.config_io import template_text
+
+    config_file = tmp_path / "jenkins-config.yaml"
+    config_file.write_text(template_text("yaml"), encoding="utf-8")
+
+    config = Config.load(str(config_file))
+
+    assert [name for name, _ in config.list_environments()] == ["dev", "prod"]

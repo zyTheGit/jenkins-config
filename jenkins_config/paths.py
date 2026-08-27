@@ -29,6 +29,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +100,89 @@ def project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def _base_detail(kind: str, base: Path, order: int) -> dict[str, Any]:
+    """组装单个候选目录的探测明细
+
+    只做路径层面的存在性判断，不打开文件——`where_config` 这类诊断入口
+    必须保证"不读配置内容"，否则返回体里迟早会掺进凭据。
+
+    Args:
+        kind: 候选目录类型（project_root / cwd / exe_dir / user_config_dir）
+        base: 候选目录
+        order: 优先级序号（从 1 开始）
+
+    Returns:
+        含 base / order / kind / exists / matched_file / skipped_reason 的字典
+
+    Example:
+        >>> _base_detail("cwd", Path.cwd(), 1)["kind"]
+        'cwd'
+    """
+    matched_file = ""
+    for name in CONFIG_FILE_NAMES:
+        candidate = base / name
+        if candidate.exists():
+            matched_file = str(candidate)
+            break
+    return {
+        "base": str(base),
+        "order": order,
+        "kind": kind,
+        "exists": base.is_dir(),
+        "matched_file": matched_file,
+        "skipped_reason": "",
+    }
+
+
+def search_bases_detail() -> list[dict[str, Any]]:
+    """获取配置文件探测候选目录的完整明细（含被跳过的候选）
+
+    与 search_bases() 的关系是"明细 → 过滤"：后者只需要可用目录，
+    而诊断场景要回答"为什么这个目录没进候选"，所以被跳过的候选也保留一行，
+    用 skipped_reason 说明原因，base 置为 None（没有可展示的路径）。
+    反过来让 search_bases() 独立实现一遍探测顺序，两份顺序早晚会漂移，
+    这也是本函数作为唯一顺序来源的原因。
+
+    Returns:
+        明细列表，每项含 base（str 或 None）、order（从 1 严格递增）、
+        kind、exists（目录是否存在）、matched_file（命中的配置文件，未命中为 ""）、
+        skipped_reason（'' 或 'home_unavailable'）
+
+    Example:
+        >>> [item["order"] for item in search_bases_detail()][:2]
+        [1, 2]
+    """
+    if getattr(sys, "frozen", False):
+        pairs: list[tuple[str, Path]] = [
+            ("cwd", Path.cwd()),
+            ("exe_dir", Path(sys.executable).resolve().parent),
+        ]
+    else:
+        pairs = [("project_root", project_root()), ("cwd", Path.cwd())]
+
+    details = [
+        _base_detail(kind, base, order)
+        for order, (kind, base) in enumerate(pairs, start=1)
+    ]
+
+    order = len(details) + 1
+    try:
+        details.append(_base_detail("user_config_dir", user_config_dir(), order))
+    except RuntimeError as exc:
+        logger.warning("无法确定家目录（%s），已跳过用户级配置目录候选", exc)
+        details.append(
+            {
+                "base": None,
+                "order": order,
+                "kind": "user_config_dir",
+                "exists": False,
+                "matched_file": "",
+                "skipped_reason": "home_unavailable",
+            }
+        )
+    return details
+
+
 def search_bases() -> list[Path]:
     """
     获取配置文件探测的候选目录（按优先级排列）
@@ -108,6 +192,8 @@ def search_bases() -> list[Path]:
     家目录不可解析时（容器 / 服务账号）记一条 warning 并跳过该候选，
     不让整条探测链因此报错。
 
+    实现委托给 search_bases_detail() 后按 base 过滤，保证"候选顺序"只有一份定义。
+
     Returns:
         候选目录列表：源码模式为 [项目根, CWD, 用户配置目录]，
         EXE 模式为 [CWD, exe 目录, 用户配置目录]；家目录不可用时末位缺省
@@ -116,15 +202,9 @@ def search_bases() -> list[Path]:
         >>> len(search_bases()) >= 2
         True
     """
-    if getattr(sys, "frozen", False):
-        bases = [Path.cwd(), Path(sys.executable).resolve().parent]
-    else:
-        bases = [project_root(), Path.cwd()]
-    try:
-        bases.append(user_config_dir())
-    except RuntimeError as exc:
-        logger.warning("无法确定家目录（%s），已跳过用户级配置目录候选", exc)
-    return bases
+    return [
+        Path(item["base"]) for item in search_bases_detail() if item["base"] is not None
+    ]
 
 
 def _expand(path: Path) -> Path:
@@ -264,3 +344,66 @@ def resolve_history_path(config_file: str | Path = "") -> Path:
     """
     base = Path(config_file) if config_file else resolve_config_file()
     return base.parent / DATA_DIR_NAME / HISTORY_FILE_NAME
+
+
+def runtime_mode() -> str:
+    """返回当前运行形态：源码运行还是 PyInstaller 冻结包
+
+    单独抽成函数是因为"是否 frozen"决定候选目录顺序、诊断展示和文档口径，
+    散落成多处 `getattr(sys, "frozen", False)` 时，只要有一处漏改，
+    诊断报告与真实探测顺序就会互相矛盾。
+
+    Returns:
+        'frozen'（PyInstaller 打包运行）或 'source'（源码运行）
+
+    Example:
+        >>> runtime_mode() in ("source", "frozen")
+        True
+    """
+    return "frozen" if getattr(sys, "frozen", False) else "source"
+
+
+def probe_report(config_arg: str | Path = "") -> dict[str, Any]:
+    """输出配置文件锚定过程的完整探测报告（纯只读，不加载配置内容）
+
+    诊断"为什么读到的是这份配置"时，光有最终路径不够，还需要候选目录顺序、
+    每个候选是否命中、运行模式这些中间量。这里把它们一次性组装出来，
+    路径的判定仍然委托 resolve_config_file() / resolve_history_path()——
+    若在本函数里重写一遍探测逻辑，诊断结果和真实取值就可能对不上，
+    那比没有诊断更糟。
+
+    本层不判定环境变量：JENKINS_MCP_CONFIG 只对 MCP Server 生效，
+    因此 source 只有 explicit_arg / probed / fallback 三态，
+    env_var 一态由 mcp/utils.probe_report_for_mcp 覆写（见模块 docstring）。
+
+    Args:
+        config_arg: 显式指定的配置文件路径，为空时按候选目录自动探测
+
+    Returns:
+        含 mode（source / frozen）、bases（search_bases_detail 明细）、
+        candidate_file_names、config_path（绝对路径字符串）、exists、
+        source（explicit_arg / probed / fallback）、history_path 的字典
+
+    Example:
+        >>> probe_report()["mode"] in ("source", "frozen")
+        True
+    """
+    bases = search_bases_detail()
+    if config_arg:
+        config_file = resolve_config_file(config_arg)
+        source = "explicit_arg"
+    else:
+        config_file = resolve_config_file()
+        # 探测未命中时 resolve_config_file 回退到首个候选目录下的默认文件名，
+        # 该文件必然不存在，正是 fallback 与 probed 的分界
+        source = "probed" if config_file.exists() else "fallback"
+
+    return {
+        "mode": runtime_mode(),
+        "bases": bases,
+        "candidate_file_names": list(CONFIG_FILE_NAMES),
+        "config_path": str(config_file),
+        "exists": config_file.exists(),
+        "source": source,
+        "history_path": str(resolve_history_path(config_file)),
+    }
