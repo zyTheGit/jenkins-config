@@ -10,14 +10,19 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
+from jenkins_config.config_io import PLACEHOLDER_VALUES
+from jenkins_config.mcp.errors import ErrorCode, classify, failure_payload
 from jenkins_config.paths import (
     CONFIG_ENV_VAR,
     CONFIG_FILE_NAMES,
     env_config_file,
+    probe_report,
     resolve_config_file,
     search_bases,
     resolve_history_path as _resolve_history_path,
@@ -28,7 +33,6 @@ logger = logging.getLogger(__name__)
 
 # 被视为"开启"的环境变量取值（统一一处，避免各处枚举漂移）
 TRUTHY_VALUES = ("1", "true", "yes", "on")
-
 
 
 # 开启写操作（触发构建、覆写配置）所需的环境变量
@@ -49,7 +53,13 @@ __all__ = [
     "TRUTHY_VALUES",
     "env_truthy",
     "allowed_config_bases",
+    "is_base_too_broad",
+    "probe_report_for_mcp",
     "resolve_config_path",
+    "backup_config_file",
+    "ConfigInspection",
+    "inspect_config",
+    "config_failure_payload",
     "resolve_history_path",
     "history_manager",
     "get_config",
@@ -126,6 +136,27 @@ def _is_too_broad(base: Path) -> bool:
     return False
 
 
+def is_base_too_broad(base: Path) -> bool:
+    """判断候选根目录是否因过宽而被排除在配置白名单之外（公开包装）
+
+    诊断类 tool（where_config）需要向外解释"这个候选为什么没进白名单"，
+    但直接引用 _is_too_broad 会让诊断层依赖私有名。这里只做转发、
+    不复制判定条件：复制一份等于埋下"白名单与诊断结论不一致"的隐患，
+    那恰好是这个 tool 要消灭的问题。
+
+    Args:
+        base: 已解析为绝对路径的候选根目录
+
+    Returns:
+        base 是文件系统根或用户家目录本身时返回 True
+
+    Example:
+        >>> is_base_too_broad(Path(Path.cwd().anchor))
+        True
+    """
+    return _is_too_broad(base)
+
+
 def resolve_config_path(config_path: str = "") -> str:
     """解析配置文件路径，为空则按环境变量 / 自动探测
 
@@ -186,6 +217,294 @@ def _is_within(path: Path, base: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def probe_report_for_mcp(config_path: str = "") -> dict[str, Any]:
+    """在 paths.probe_report 之上补齐 MCP 侧特有的锚定信息
+
+    paths 层刻意不认识 JENKINS_MCP_CONFIG（否则该变量会顺带改掉 CLI 的探测），
+    所以"环境变量生效了吗"只能在这一层折算：把环境变量折成 probe_report 的入参，
+    再把 source 从 explicit_arg 改写为 env_var。相对路径的忽略逻辑完全复用
+    paths.env_config_file()——在这里重判一次，就会出现"诊断说生效、实际没生效"。
+
+    同理，白名单的"过宽"过滤也只转发 is_base_too_broad，不复制判定条件。
+    注意本函数只做路径层面的探测，不加载配置内容，因此返回体天然不含任何凭据。
+
+    Args:
+        config_path: 显式指定的配置文件路径，为空时按环境变量 / 自动探测
+
+    Returns:
+        probe_report() 的返回体，额外含 env_var（name / value / effective）、
+        allowed_config_bases、path_allowed（解析结果是否落在白名单内），
+        且 bases 每项追加 allowed；被"过宽"过滤剔除的候选
+        其 skipped_reason 记为 too_broad
+
+    Example:
+        >>> probe_report_for_mcp()["env_var"]["name"]
+        'JENKINS_MCP_CONFIG'
+    """
+    from_env = env_config_file()
+    env_applies = not config_path and from_env is not None
+
+    report = probe_report(str(from_env) if env_applies else config_path)
+    if env_applies:
+        report["source"] = "env_var"
+
+    report["env_var"] = {
+        "name": CONFIG_ENV_VAR,
+        "value": os.environ.get(CONFIG_ENV_VAR, ""),
+        "effective": report["source"] == "env_var",
+    }
+
+    for item in report["bases"]:
+        base = item["base"]
+        if base is None:
+            item["allowed"] = False
+        elif is_base_too_broad(Path(base).resolve()):
+            item["allowed"] = False
+            item["skipped_reason"] = "too_broad"
+        else:
+            item["allowed"] = True
+
+    report["allowed_config_bases"] = [str(base) for base in allowed_config_bases()]
+    report["path_allowed"] = _path_allowed(str(from_env) if env_applies else config_path)
+    return report
+
+
+def _path_allowed(config_path: str) -> bool:
+    """判断解析后的配置路径是否落在允许范围内
+
+    判定完全委托 resolve_config_path（捕获它抛的 PermissionError），不在这里
+    重跑一遍 _is_within：诊断层若自带一套判定，就会出现"where_config 说允许、
+    真正读配置时被拒"这种自相矛盾的结论，而白名单是安全边界，两套判定意味着
+    其中一套迟早失效。
+
+    Args:
+        config_path: 已折算环境变量后的路径入参，为空时表示自动探测
+
+    Returns:
+        路径在允许范围内时返回 True；被白名单拒绝时返回 False
+
+    Example:
+        >>> _path_allowed("")
+        True
+    """
+    try:
+        resolve_config_path(config_path)
+        return True
+    except PermissionError:
+        return False
+
+
+def backup_config_file(target: Path) -> str:
+    """把已存在的配置文件备份一份并返回备份路径
+
+    首个备份用 `<name>.bak`；该名字已被占用时改用 `<name>.<时间戳>.bak`——
+    固定名意味着第二次覆写会把上一份备份也换成模板内容，而配置文件里
+    通常就是唯一一份可用凭据，那样等于没有备份。
+
+    **调用方应在持有 target 的 file_lock 期间调用**：备份与写入落在同一个临界区，
+    才不会出现"把已经被替换过的文件备份成原文件"。init_config 即如此使用；
+    save_config 是例外——它的写入由 config_io.save_config 内部自行加同名锁，
+    外层再套一层会自锁，因此那里只能接受这一小段窗口。
+
+
+    Args:
+        target: 目标配置文件路径
+
+    Returns:
+        备份文件的绝对路径；目标不存在（无需备份）时返回空字符串
+
+    Raises:
+        OSError: 读取原文件或写入备份失败
+
+    Example:
+        >>> backup_config_file(Path("not-exists.yaml"))
+        ''
+    """
+    if not target.exists():
+        return ""
+    backup_path = target.parent / f"{target.name}.bak"
+    if backup_path.exists():
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        backup_path = target.parent / f"{target.name}.{stamp}.bak"
+    backup_path.write_bytes(target.read_bytes())
+    return str(backup_path)
+
+
+@dataclass
+class ConfigInspection:
+    """配置分层探测结果（路径 → 存在 → 可读 → 可解析 → 完整）
+
+    每一层都单独留一个布尔字段，而不是只给一个 ok/error：doctor 需要按层
+    报出"卡在哪一步"，把它们压成单个布尔后就再也分不出"文件不存在"和
+    "文件在但没填"，而这两者的下一步动作完全不同。
+    """
+
+    config_path: str
+    source: str
+    exists: bool
+    readable: bool
+    parse_ok: bool
+    complete: bool
+    path_allowed: bool
+    placeholder_fields: list[str] = field(default_factory=list)
+    error_code: str = ""
+    error: str = ""
+    config: Any | None = None
+
+
+def _dotted_value(config: Any, dotted: str) -> Any:
+    """按点分路径取 Config 上的属性值
+
+    Args:
+        config: Config 实例
+        dotted: 点分路径，如 'server.url'
+
+    Returns:
+        属性值；路径上任一段不存在时返回 None
+
+    Example:
+        >>> _dotted_value(None, "server.url") is None
+        True
+    """
+    current = config
+    for part in dotted.split("."):
+        current = getattr(current, part, None)
+        if current is None:
+            return None
+    return current
+
+
+def inspect_config(config_path: str = "") -> ConfigInspection:
+    """分层探测配置状态：路径白名单 → 存在 → 可读 → 可解析 → 完整
+
+    任何一层失败即短路返回，**不抛异常**：调用方是 doctor 与各 tool 的失败分支，
+    它们需要的是"卡在第几层"，而不是再接一层 try。
+
+    "完整"只能靠占位符比对判定：模板里的 http://your-jenkins-server:8080 /
+    your-api-token 都非空，能通过 config_io._validate_config，所以一份只 init 过
+    没填过的配置照样加载成功（见 config_io.PLACEHOLDER_VALUES 注释）。
+
+    可读性这一层会把文件读一遍，随后 Config.load 又读一遍。多一次读的代价换来
+    "权限问题"与"语法问题"在错误码上彻底分开；合并成一次读则只能靠异常类型猜，
+    而 Windows/Linux 对"读目录"抛的异常类型本就不同。
+
+    Args:
+        config_path: 显式指定的配置文件路径，为空时按环境变量 / 自动探测
+
+    Returns:
+        ConfigInspection 实例；error_code 为 '' 表示五层全通过
+
+    Example:
+        >>> inspect_config("/not/exists/jenkins-config.yaml").exists
+        False
+    """
+    from jenkins_config.config import Config
+
+    try:
+        report = probe_report_for_mcp(config_path)
+        resolved, source = report["config_path"], report["source"]
+    except Exception as exc:  # 探测本身失败（如家目录不可解析）
+        return ConfigInspection(
+            config_path="", source="unknown", exists=False, readable=False,
+            parse_ok=False, complete=False, path_allowed=False,
+            error_code=classify(exc, "resolve"), error=str(exc),
+        )
+
+    def _fail(code: str, error: str, **flags: Any) -> ConfigInspection:
+        """按当前路径信息组装短路结果"""
+        base: dict[str, Any] = {
+            "exists": False, "readable": False, "parse_ok": False,
+            "complete": False, "path_allowed": True,
+        }
+        base.update(flags)
+        return ConfigInspection(
+            config_path=resolved, source=source, error_code=code, error=error, **base
+        )
+
+    try:
+        resolved = resolve_config_path(config_path)
+    except PermissionError as exc:
+        return _fail(ErrorCode.CONFIG_PATH_DENIED, str(exc), path_allowed=False)
+    except RuntimeError as exc:
+        return _fail(ErrorCode.HOME_UNAVAILABLE, str(exc), path_allowed=False)
+
+    path = Path(resolved)
+    if not path.is_file():
+        return _fail(ErrorCode.CONFIG_NOT_FOUND, f"配置文件不存在: {resolved}")
+
+    try:
+        path.read_text(encoding="utf-8")
+    except (OSError, ValueError) as exc:
+        return _fail(
+            classify(exc, "read"), f"配置文件不可读: {resolved}（{exc}）", exists=True
+        )
+
+    try:
+        config = Config.load(resolved)
+    except Exception as exc:
+        return _fail(
+            classify(exc, "parse"), f"配置解析失败: {exc}", exists=True, readable=True
+        )
+
+    placeholders = [
+        key
+        for key, placeholder in PLACEHOLDER_VALUES.items()
+        if _dotted_value(config, key) == placeholder
+    ]
+    if placeholders:
+        return ConfigInspection(
+            config_path=resolved, source=source, exists=True, readable=True,
+            parse_ok=True, complete=False, path_allowed=True,
+            placeholder_fields=placeholders,
+            error_code=ErrorCode.CONFIG_INCOMPLETE,
+            # 只报键名，不回显取值：这里含 server.token
+            error=f"配置仍是模板占位符，未填写的字段: {', '.join(placeholders)}",
+            config=config,
+        )
+
+    return ConfigInspection(
+        config_path=resolved, source=source, exists=True, readable=True,
+        parse_ok=True, complete=True, path_allowed=True, config=config,
+    )
+
+
+def config_failure_payload(
+    config_path: str = "", exc: BaseException | None = None, action: str = ""
+) -> dict[str, Any]:
+    """把配置相关的异常折算为统一失败载荷
+
+    先重跑一次路径解析来确定 phase：白名单越界与文件权限失败都抛 PermissionError，
+    而 tool 内部只拿得到一个异常对象，靠类型分不出来。重跑只做存在性判断、
+    不读文件内容，代价可忽略，换来错误码的确定性。
+
+    Args:
+        config_path: 调用方传入的配置文件路径，为空时按环境变量 / 自动探测
+        exc: 捕获到的异常，为 None 时按 UNKNOWN 处理
+        action: 人类可读的动作前缀，如 "加载配置失败"
+
+    Returns:
+        failure_payload() 的五字段字典
+
+    Example:
+        >>> config_failure_payload(exc=FileNotFoundError("x"))["error_code"]
+        'config_not_found'
+    """
+    def _describe(reason: BaseException) -> str:
+        """拼接 "动作: 原因" 形式的文案"""
+        return f"{action}: {reason}" if action else str(reason)
+
+    try:
+        resolved = resolve_config_path(config_path)
+    except PermissionError as denied:
+        return failure_payload(ErrorCode.CONFIG_PATH_DENIED, _describe(denied))
+    except RuntimeError as no_home:
+        return failure_payload(ErrorCode.HOME_UNAVAILABLE, _describe(no_home))
+
+    if exc is None:
+        return failure_payload(ErrorCode.UNKNOWN, action or "未知错误", resolved)
+    return failure_payload(classify(exc, "read"), _describe(exc), resolved)
 
 
 def resolve_history_path(config_path: str = "") -> Path:
@@ -485,18 +804,33 @@ def projects_payload(config: Any, env: str | None = None) -> list[dict[str, str]
     ]
 
 
-def failure_result(message: str, job_key: str = "") -> dict[str, Any]:
+def failure_result(
+    message: str, job_key: str = "", payload: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """构造 trigger_build / rebuild_last 的失败返回体
 
+    容器结构保持 {'triggered': [], 'failed': [...]} 不变——调用方（含既有测试）
+    都按这个形状读结果。可行动信息以 error_code / next_steps 等键**追加在顶层**，
+    而不是塞进 failed[0]：失败可能有多条，顶层只需要一份"这次为什么整体失败"。
+    failed[0]['error'] 继续保留人类可读文案。
+
     Args:
-        message: 错误信息
+        message: 错误信息（人类可读）
         job_key: 相关的 Job 标识，未知时留空
+        payload: errors.failure_payload() 的返回体，非 None 时其五个字段合并到顶层
 
     Returns:
-        包含空 triggered 列表和单条 failed 记录的字典
+        含空 triggered 列表与单条 failed 记录的字典；带 payload 时额外含
+        error_code、error、config_path、next_steps、docs
 
     Example:
         >>> failure_result("配置文件不存在")
         {'triggered': [], 'failed': [{'job_key': '', 'error': '配置文件不存在'}]}
     """
-    return {"triggered": [], "failed": [{"job_key": job_key, "error": message}]}
+    result: dict[str, Any] = {
+        "triggered": [],
+        "failed": [{"job_key": job_key, "error": message}],
+    }
+    if payload:
+        result.update(payload)
+    return result

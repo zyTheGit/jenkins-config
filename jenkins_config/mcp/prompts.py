@@ -56,3 +56,34 @@ def diagnose_failure(build_log: str) -> str:
 3. 可能的修复方案
 4. 预防措施
 """
+
+
+@mcp.prompt()
+def setup_workflow() -> str:
+    """引导用户从零完成本地配置直到 list_environments 成功的交互流程
+
+    刻意把"编辑文件填真实取值"单列一步并停下来等用户：server.token 是凭据，
+    不能由客户端猜或代填，模板生成后必须由人补上。
+
+    Returns:
+        提示词文本，按"doctor → where_config → init_config → 人工填字段 →
+        list_environments 验证"的顺序指导客户端
+
+    Example:
+        >>> "init_config" in setup_workflow()
+        True
+    """
+
+    return """请按以下五步协助用户完成 Jenkins MCP 的首次配置：
+
+1. 调用 doctor 做一次本地体检，确认卡在哪一层（配置是否存在、是否填完、写开关状态）
+2. 调用 where_config 查看候选目录顺序与当前会读到哪个路径
+3. 若配置文件尚不存在，调用 init_config 生成模板（默认写入用户级目录
+   ~/.jenkins-config；需要放在当前工作目录时传 target='cwd'）。
+   若返回 config_exists，说明已有配置，不要覆盖，回到第 2 步确认路径
+4. 请用户打开 init_config 返回的 path，把 server.url 与 server.token 从占位符改为
+   真实取值（token 属于凭据，必须由用户本人填写，不要代填或猜测），
+   并按 template_fields 中 required 的字段补齐 environments 下的环境与项目
+5. 调用 list_environments 验证：能列出真实环境即配置生效；
+   若仍失败，按返回体里的 error_code 与 next_steps 继续处理
+"""

@@ -76,9 +76,166 @@ def test_register_tools_registers_tools():
         # 构建操作类
         "trigger_build",
         "rebuild_last",
+        # 诊断类（阶段①②新增）
+        "where_config",
+        "doctor",
+        # 初始化类（阶段③新增）
+        "init_config",
     ]
     for name in expected_tools:
         assert name in tool_names
+
+    # 总数钉住：新增 tool 必须同步登记到本清单，避免注册了却没人知道
+    assert len(registered_tools) == 14
+    assert sorted(tool_names) == sorted(expected_tools)
+
+
+def test_register_tools_registers_prompts():
+    """验证 3 个 prompt 均已注册，且 setup_workflow 明确引导到 init_config"""
+    from jenkins_config.mcp.server import mcp, _register_tools
+
+    _register_tools()
+
+    prompts = asyncio.run(mcp.list_prompts())
+    names = [p.name for p in prompts]
+
+    assert len(prompts) == 3
+    assert sorted(names) == ["build_workflow", "diagnose_failure", "setup_workflow"]
+
+    from jenkins_config.mcp.prompts import setup_workflow
+
+    text = setup_workflow()
+    assert "init_config" in text
+    assert "doctor" in text
+    assert "where_config" in text
+    assert "list_environments" in text
+
+
+def test_list_tools_generates_output_schema_for_list_tools():
+    """验证 list 型 tool 放宽为 list[dict[str, Any]] 后 schema 仍可生成
+
+    FastMCP 会为返回值生成 output schema，容器内类型改宽是有可能被拒的；
+    这条用例把"注解能被 FastMCP 接受"钉住，避免只在真实客户端里才暴雷。
+    """
+    from jenkins_config.mcp.server import mcp, _register_tools
+
+    _register_tools()
+    tools = {t.name: t for t in asyncio.run(mcp.list_tools())}
+
+    for name in ("list_environments", "list_projects", "show_history"):
+        schema = tools[name].outputSchema
+        assert schema is not None
+        assert schema["properties"]["result"]["type"] == "array"
+
+
+def test_all_tools_keep_stdout_clean(capsys, monkeypatch, tmp_path):
+    """验证调用全部 tool 期间 stdout 始终为空
+
+    stdout 是 JSON-RPC 通道，任何一行 print 都会让客户端解析失败。
+    init_config 默认写用户级目录，因此这里把家目录改到 tmp_path，
+    避免体检式的全量调用把文件落到开发者真实的 ~/.jenkins-config。
+    """
+    from pathlib import Path
+
+    from jenkins_config.mcp.server import mcp, _register_tools
+
+    monkeypatch.delenv("JENKINS_MCP_ALLOW_WRITE", raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+
+    def _no_network(*args, **kwargs):
+        raise ConnectionError("用例禁止真实外呼")
+
+    # 诊断类 tool 会建客户端；替掉客户端构造即可切断网络，同时保留失败分支
+    monkeypatch.setattr(
+        "jenkins_config.mcp.utils.build_jenkins_client", _no_network
+    )
+
+    _register_tools()
+    tools = asyncio.run(mcp.list_tools())
+    required_args = {
+        "get_build_status": {"job_path": "demo", "build_num": 1},
+        "get_build_log": {"job_path": "demo", "build_num": 1},
+    }
+
+    capsys.readouterr()
+    for tool in tools:
+        asyncio.run(mcp.call_tool(tool.name, required_args.get(tool.name, {})))
+
+    assert capsys.readouterr().out == ""
+
+
+# ============================================================================
+# current_log_sinks 测试
+# ============================================================================
+
+
+def test_current_log_sinks_reports_not_installed(monkeypatch):
+    """验证未安装 handler 时如实报告，而不是凭 resolve_log_file() 推算文件名"""
+    import logging
+
+    from jenkins_config.mcp import server
+
+    monkeypatch.setenv(server.LOG_FILE_ENV_VAR, "auto")
+    root = logging.getLogger()
+    original_level = root.level
+    try:
+        server._own_handlers.clear()
+        sinks = server.current_log_sinks()
+
+        assert sinks["initialized"] is False
+        assert sinks["file_sinks"] == []
+        assert "handler 未安装" in sinks["sinks"][0]
+    finally:
+        _teardown_logging(root, original_level)
+
+
+def test_current_log_sinks_reports_actual_file(tmp_path, monkeypatch):
+    """验证已安装文件 handler 时报出真实落点"""
+    import logging
+
+    from jenkins_config.mcp import server
+
+    log_file = tmp_path / "mcp.log"
+    monkeypatch.setenv(server.LOG_FILE_ENV_VAR, str(log_file))
+    monkeypatch.setenv(server.LOG_LEVEL_ENV_VAR, "INFO")
+    root = logging.getLogger()
+    original_level = root.level
+    try:
+        server.setup_logging()
+        sinks = server.current_log_sinks()
+
+        assert sinks["initialized"] is True
+        assert sinks["level"] == "INFO"
+        assert str(log_file) in sinks["file_sinks"][0]
+        assert any("stderr" == item for item in sinks["sinks"])
+    finally:
+        _teardown_logging(root, original_level)
+
+
+def test_current_log_sinks_degrades_instead_of_raising(monkeypatch):
+    """验证探查失败时降级返回，绝不抛出（诊断入口不能把会话打断）"""
+    from jenkins_config.mcp import server
+
+    class _Unreadable:
+        """遍历即失败的 handler 容器，模拟探查过程中的意外异常"""
+
+        def __iter__(self):
+            raise RuntimeError("handler 容器损坏")
+
+    monkeypatch.setattr(server, "_own_handlers", _Unreadable())
+
+    sinks = server.current_log_sinks()
+
+    assert sinks["initialized"] is False
+    assert sinks["level"] == "unknown"
+    assert "探查失败" in sinks["sinks"][0]
+    # 环境变量取值必须照样报出，便于人工核对
+    assert server.LOG_FILE_ENV_VAR in sinks["env"]
 
 
 # ============================================================================

@@ -191,6 +191,59 @@ def setup_logging() -> None:
         )
 
 
+def current_log_sinks() -> dict[str, Any]:
+    """只读探查当前已安装的日志落点（绝不重新初始化日志）
+
+    刻意不调用 setup_logging()，也不复用 resolve_log_file() 的 auto 拼名：
+    - 调 setup_logging 会在诊断过程中改写宿主进程的 root logger；
+    - 用 resolve_log_file() 推算路径，会在 handler 尚未安装时凭空报出一个
+      并不存在的文件名，而且无 HOME 时 `~` 展开还会抛 RuntimeError。
+    因此这里只遍历 _own_handlers 读取**实际**落点，读不到就如实说"未安装"。
+
+    Returns:
+        含 level（当前根 logger 级别名）、sinks（落点描述列表）、
+        file_sinks（文件落点的绝对路径列表）、initialized（是否已装过 handler）、
+        env（两个日志环境变量的原始取值）的字典；解析失败时 sinks 记为降级说明
+
+    Example:
+        >>> sorted(current_log_sinks())
+        ['env', 'file_sinks', 'initialized', 'level', 'sinks']
+    """
+    env = {
+        LOG_LEVEL_ENV_VAR: os.environ.get(LOG_LEVEL_ENV_VAR, ""),
+        LOG_FILE_ENV_VAR: os.environ.get(LOG_FILE_ENV_VAR, ""),
+    }
+    try:
+        level = logging.getLevelName(logging.getLogger().level)
+        sinks: list[str] = []
+        file_sinks: list[str] = []
+        for handler in _own_handlers:
+            base_name = getattr(handler, "baseFilename", "")
+            if base_name:
+                sinks.append(f"文件: {base_name}")
+                file_sinks.append(str(base_name))
+            else:
+                sinks.append("stderr")
+        if not sinks:
+            sinks.append("stderr（handler 未安装）")
+            return {
+                "level": level, "sinks": sinks, "file_sinks": file_sinks,
+                "initialized": False, "env": env,
+            }
+        return {
+            "level": level, "sinks": sinks, "file_sinks": file_sinks,
+            "initialized": True, "env": env,
+        }
+    except Exception as exc:  # 诊断入口绝不因自身失败而抛出
+        return {
+            "level": "unknown",
+            "sinks": [f"探查失败: {exc}"],
+            "file_sinks": [],
+            "initialized": False,
+            "env": env,
+        }
+
+
 def get_mcp() -> Any:
     """获取（并惰性创建）FastMCP 实例
 
@@ -240,6 +293,9 @@ def _register_tools() -> None:
     from jenkins_config.mcp.tools import history_tools  # noqa: F401
     from jenkins_config.mcp.tools import diagnose_tools  # noqa: F401
     from jenkins_config.mcp.tools import build_tools    # noqa: F401
+    from jenkins_config.mcp.tools import where_tools    # noqa: F401
+    from jenkins_config.mcp.tools import doctor_tools   # noqa: F401
+    from jenkins_config.mcp.tools import init_tools     # noqa: F401
     from jenkins_config.mcp import resources             # noqa: F401
     from jenkins_config.mcp import prompts               # noqa: F401
 
