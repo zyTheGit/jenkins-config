@@ -48,6 +48,7 @@ lib/
 lib64/
 parts/
 sdist/
+summaries/
 var/
 venv/
 wheels/
