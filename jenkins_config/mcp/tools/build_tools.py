@@ -16,9 +16,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from jenkins_config.mcp.errors import ErrorCode, failure_payload
 from jenkins_config.mcp.server import mcp
 from jenkins_config.mcp.utils import (
     build_jenkins_client,
+    config_failure_payload,
     failure_result,
     get_config,
     history_manager,
@@ -362,7 +364,8 @@ def trigger_build(
     Returns:
         包含 triggered（已触发列表）和 failed（失败列表）的字典，
         每项包含 job_key、queue_url、build_num 等字段；
-        参数中含非标量值时附带 skipped_params，历史写入失败时附带 history_error
+        参数中含非标量值时附带 skipped_params，历史写入失败时附带 history_error；
+        整体失败时顶层追加 error_code / config_path / next_steps / docs
 
     Example:
         >>> trigger_build(env="dev", projects="project-a")  # doctest: +SKIP
@@ -370,10 +373,16 @@ def trigger_build(
     """
     try:
         if not write_allowed():
-            return failure_result(write_denied_message("触发构建"))
+            message = write_denied_message("触发构建")
+            return failure_result(
+                message, payload=failure_payload(ErrorCode.WRITE_NOT_ALLOWED, message)
+            )
 
         if not env:
-            return failure_result("必须指定环境名称 (env 参数不能为空)")
+            message = "必须指定环境名称 (env 参数不能为空)"
+            return failure_result(
+                message, payload=failure_payload(ErrorCode.INVALID_TARGET, message)
+            )
 
         config = get_config(config_path)
 
@@ -387,7 +396,10 @@ def trigger_build(
         jobs = config.get_jobs(env=env, jobs=jobs_filter)
 
         if not jobs:
-            return failure_result(f"环境 '{env}' 中没有找到匹配的项目")
+            message = f"环境 '{env}' 中没有找到匹配的项目"
+            return failure_result(
+                message, payload=failure_payload(ErrorCode.INVALID_TARGET, message)
+            )
 
         # 覆盖分支参数：参数名按 job 所属环境解析（环境级覆盖优先于全局）
         if branch:
@@ -399,7 +411,10 @@ def trigger_build(
         try:
             extra_params, skipped_params = _parse_params_string(params)
         except ValueError as e:
-            return failure_result(f"参数解析失败: {e}")
+            message = f"参数解析失败: {e}"
+            return failure_result(
+                message, payload=failure_payload(ErrorCode.INVALID_TARGET, message)
+            )
         if extra_params:
             for job in jobs:
                 job.params.update(extra_params)
@@ -415,9 +430,15 @@ def trigger_build(
         return result
 
     except FileNotFoundError as e:
-        return failure_result(f"配置文件不存在: {e}")
+        return failure_result(
+            f"配置文件不存在: {e}",
+            payload=config_failure_payload(config_path, e, "配置文件不存在"),
+        )
     except Exception as e:
-        return failure_result(f"触发构建失败: {e}")
+        return failure_result(
+            f"触发构建失败: {e}",
+            payload=config_failure_payload(config_path, e, "触发构建失败"),
+        )
 
 
 def _optional_branch_field_for(config_path: str) -> Callable[[str], str] | None:
@@ -515,7 +536,8 @@ def rebuild_last(
 
     Returns:
         包含 triggered（已触发列表）和 failed（失败列表）的字典，
-        格式同 trigger_build
+        格式同 trigger_build；整体失败时顶层追加
+        error_code / config_path / next_steps / docs
 
     Example:
         >>> rebuild_last()  # doctest: +SKIP
@@ -523,40 +545,90 @@ def rebuild_last(
     """
     try:
         if not write_allowed():
-            return failure_result(write_denied_message("重建构建"))
+            message = write_denied_message("重建构建")
+            return failure_result(
+                message, payload=failure_payload(ErrorCode.WRITE_NOT_ALLOWED, message)
+            )
 
         from jenkins_config.jenkins import JenkinsClient
 
         # 判断是否为直连模式：两个参数必须成对出现，
         # 只给其一时显式报错，避免静默回落到配置文件模式（会跳过主机白名单）
         if bool(jenkins_url) != bool(jenkins_token):
+            message = "直连模式必须同时提供 jenkins_url 与 jenkins_token"
             return failure_result(
-                "直连模式必须同时提供 jenkins_url 与 jenkins_token"
+                message, payload=failure_payload(ErrorCode.INVALID_TARGET, message)
             )
 
         if jenkins_url and jenkins_token:
 
             if not host_allowed(jenkins_url):
-                return failure_result(
+                message = (
                     f"目标地址不在允许范围内: {jenkins_url}（"
                     "请通过环境变量 JENKINS_MCP_ALLOWED_HOSTS 放行）"
+                )
+                return failure_result(
+                    message,
+                    payload=failure_payload(
+                        ErrorCode.INVALID_TARGET,
+                        message,
+                        next_steps=[
+                            "把该主机加入环境变量 JENKINS_MCP_ALLOWED_HOSTS（逗号分隔）后重启 Server",
+                            "或改用配置文件模式（不传 jenkins_url / jenkins_token）",
+                        ],
+                    ),
                 )
 
             hist_file = history_file or str(resolve_history_path(config_path))
             if not Path(hist_file).exists():
-                return failure_result(f"历史文件不存在: {hist_file}")
+                message = f"历史文件不存在: {hist_file}"
+                return failure_result(
+                    message,
+                    payload=failure_payload(
+                        ErrorCode.INVALID_TARGET,
+                        message,
+                        next_steps=[
+                            "先调用 trigger_build 触发一次构建以生成历史记录",
+                            "或调用 doctor 确认 history_path 指向的位置是否正确",
+                        ],
+                    ),
+                )
 
             manager = history_manager(history_file=hist_file)
             last_group = manager.get_last_build_group()
             if not last_group:
-                return failure_result("没有找到上次成功构建的记录")
+                return failure_result(
+                    "没有找到上次成功构建的记录",
+                    payload=failure_payload(
+                        ErrorCode.INVALID_TARGET,
+                        "没有找到上次成功构建的记录",
+                        next_steps=[
+                            "调用 show_history 查看现有记录",
+                            "或调用 trigger_build 触发一次构建后重试",
+                        ],
+                    ),
+                )
 
             jobs, skipped = _jobs_from_records(last_group)
             if not jobs:
-                return {
-                    "triggered": [],
-                    "failed": skipped or [{"job_key": "", "error": "没有可重建的项目"}],
-                }
+                # 一条都没能还原成 Job：这是整体失败，必须带 error_code /
+                # next_steps，否则调用方只能从 failed[0].error 的中文里猜原因
+                result = failure_result(
+                    "没有可重建的项目",
+                    payload=failure_payload(
+                        ErrorCode.INVALID_TARGET,
+                        "历史记录中的项目都无法还原为可构建对象，没有可重建的项目",
+                        next_steps=[
+                            "调用 show_history 查看历史记录里的项目名",
+                            "调用 list_projects 确认这些项目是否仍然存在",
+                            "或调用 trigger_build 显式指定要构建的项目",
+                        ],
+                    ),
+                )
+                if skipped:
+                    result["failed"] = skipped
+                return result
+
 
             # 直连模式也尽力取到分支参数名的解析函数：
             # 配置可读时用 config.branch_field_for，否则回退默认 "branch"
@@ -582,7 +654,18 @@ def rebuild_last(
 
         last_group = manager.get_last_build_group()
         if not last_group:
-            return failure_result("没有找到上次成功构建的记录")
+            return failure_result(
+                "没有找到上次成功构建的记录",
+                payload=failure_payload(
+                    ErrorCode.INVALID_TARGET,
+                    "没有找到上次成功构建的记录",
+                    history_file_path,
+                    [
+                        "调用 show_history 查看现有记录",
+                        "或调用 trigger_build 触发一次构建后重试",
+                    ],
+                ),
+            )
 
         jobs = []
         skipped_cfg: list[dict[str, str]] = []
@@ -597,10 +680,23 @@ def rebuild_last(
                 })
 
         if not jobs:
-            return {
-                "triggered": [],
-                "failed": skipped_cfg or [{"job_key": "", "error": "没有可重建的项目"}],
-            }
+            result = failure_result(
+                "没有可重建的项目",
+                payload=failure_payload(
+                    ErrorCode.INVALID_TARGET,
+                    "历史记录中的项目在当前配置里都不存在，没有可重建的项目",
+                    history_file_path,
+                    [
+                        "调用 list_projects 确认这些项目是否仍在配置中",
+                        "调用 show_history 查看历史记录里的项目名",
+                        "或调用 trigger_build 显式指定要构建的项目",
+                    ],
+                ),
+            )
+            if skipped_cfg:
+                result["failed"] = skipped_cfg
+            return result
+
 
         result = _trigger_jobs(config, jobs, history_file_path)
         if skipped_cfg:
@@ -608,6 +704,12 @@ def rebuild_last(
         return result
 
     except FileNotFoundError as e:
-        return failure_result(f"文件不存在: {e}")
+        return failure_result(
+            f"文件不存在: {e}",
+            payload=config_failure_payload(config_path, e, "文件不存在"),
+        )
     except Exception as e:
-        return failure_result(f"重建失败: {e}")
+        return failure_result(
+            f"重建失败: {e}",
+            payload=config_failure_payload(config_path, e, "重建失败"),
+        )

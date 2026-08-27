@@ -86,16 +86,20 @@ def test_list_environments_empty_config():
 
 
 def test_list_environments_config_load_error():
-    """验证配置加载失败时返回错误信息"""
+    """验证配置加载失败时返回单元素纯错误载荷（不含伪造的业务键）"""
     with patch("jenkins_config.mcp.tools.config_tools.get_config", side_effect=FileNotFoundError("配置文件不存在")):
         from jenkins_config.mcp.tools.config_tools import list_environments
 
         result = list_environments()
 
         assert len(result) == 1
-        assert result[0]["name"] == "error"
-        assert "加载配置失败" in result[0]["description"]
-        assert "配置文件不存在" in result[0]["description"]
+        payload = result[0]
+        assert set(payload) == {"error_code", "error", "config_path", "next_steps", "docs"}
+        # 旧实现塞 name="error"，模型会把它当成一个真实环境
+        assert "name" not in payload
+        assert payload["error_code"] == "config_not_found"
+        assert "加载配置失败" in payload["error"]
+        assert payload["next_steps"]
 
 
 # ============================================================================
@@ -143,16 +147,19 @@ def test_list_projects_all_envs_when_env_empty(mock_config):
 
 
 def test_list_projects_config_load_error():
-    """验证配置加载失败时 list_projects 返回错误信息"""
+    """验证配置加载失败时 list_projects 返回单元素纯错误载荷"""
     with patch("jenkins_config.mcp.tools.config_tools.get_config", side_effect=Exception("配置错误")):
         from jenkins_config.mcp.tools.config_tools import list_projects
 
         result = list_projects(env="dev")
 
         assert len(result) == 1
-        assert result[0]["environment"] == "error"
-        assert result[0]["name"] == "error"
-        assert "加载配置失败" in result[0]["path"]
+        payload = result[0]
+        assert set(payload) == {"error_code", "error", "config_path", "next_steps", "docs"}
+        # 旧实现把错误塞进 path 字段，调用方会拿它当 Job 路径去触发构建
+        assert "path" not in payload and "environment" not in payload
+        assert "加载配置失败" in payload["error"]
+        assert payload["next_steps"]
 
 
 # ============================================================================

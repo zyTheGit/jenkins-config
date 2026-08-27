@@ -133,15 +133,17 @@ def test_show_history_empty_result():
 
 
 def test_show_history_error_handling():
-    """验证 show_history 异常时返回错误信息"""
+    """验证 show_history 异常时返回单元素纯错误载荷"""
     with patch("jenkins_config.mcp.tools.history_tools._get_history_manager", side_effect=Exception("文件损坏")):
         from jenkins_config.mcp.tools.history_tools import show_history
 
         result = show_history()
 
         assert len(result) == 1
-        assert "error" in result[0]
-        assert "查询历史记录失败" in result[0]["error"]
+        payload = result[0]
+        assert set(payload) == {"error_code", "error", "config_path", "next_steps", "docs"}
+        assert "查询历史记录失败" in payload["error"]
+        assert payload["next_steps"]
 
 
 # ============================================================================
@@ -183,7 +185,7 @@ def test_show_history_stats_zero_records():
 
 
 def test_show_history_stats_error_handling():
-    """验证 show_history_stats 异常时返回错误信息"""
+    """验证 show_history_stats 异常时顶层合并统一失败载荷"""
     with patch("jenkins_config.mcp.tools.history_tools._get_history_manager", side_effect=Exception("统计失败")):
         from jenkins_config.mcp.tools.history_tools import show_history_stats
 
@@ -191,6 +193,8 @@ def test_show_history_stats_error_handling():
 
         assert "error" in result
         assert "查询历史统计失败" in result["error"]
+        assert result["error_code"]
+        assert result["next_steps"]
 
 
 def test_show_history_stats_high_success_rate(mock_manager):
