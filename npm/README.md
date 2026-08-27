@@ -24,6 +24,50 @@ MCP Server 本体是 Python 实现，但发布物是 PyInstaller 打出的单文
 
 支持的平台：Windows x64、macOS x64 / arm64、Linux x64 / arm64。
 
+## 其他客户端
+
+上面那段 `mcpServers` 适用于 Claude Desktop / Claude Code / Cursor 等大多数客户端。以下三家键名或格式不同，照抄会配了不生效：
+
+**Codex CLI** — `~/.codex/config.toml`（或受信任项目的 `.codex/config.toml`），TOML 格式，表名带下划线：
+
+```toml
+[mcp_servers.jenkins-build]
+command = "npx"
+args = ["-y", "@zythegit/jenkins-config-mcp"]
+env = { JENKINS_MCP_ALLOW_WRITE = "1" }
+```
+
+也可以 `codex mcp add jenkins-build --env JENKINS_MCP_ALLOW_WRITE=1 -- npx -y @zythegit/jenkins-config-mcp`，TUI 里用 `/mcp` 看连接状态。
+
+**OpenCode** — `~/.config/opencode/opencode.json`（或项目根的 `opencode.json`）的 `mcp` 键下，`command` 是数组，环境变量键名是 `environment` 而非 `env`：
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "jenkins-build": {
+      "type": "local",
+      "command": ["npx", "-y", "@zythegit/jenkins-config-mcp"],
+      "environment": { "JENKINS_MCP_ALLOW_WRITE": "1" },
+      "enabled": true
+    }
+  }
+}
+```
+
+**Pi** — 内核不带 MCP，得先装适配器扩展并重启 Pi：
+
+```bash
+pi install npm:pi-mcp-adapter
+```
+
+之后写项目根的 `.mcp.json` 或全局 `~/.pi/agent/mcp.json`，格式与上面那段 `mcpServers` 完全一致，直接复制。装好后用 `/mcp` 面板看连接状态。
+
+VS Code (Copilot) 的 `.vscode/mcp.json` 顶层键是 `servers` 而不是 `mcpServers`。逐客户端的完整说明见仓库内 `docs/mcp/README.md` §3.4。
+
+改完配置都要重启客户端，MCP 配置不热加载。
+
+
 ## 解析优先级
 
 1. `JENKINS_MCP_BINARY` — 直接指定二进制路径
