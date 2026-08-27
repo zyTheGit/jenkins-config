@@ -3,9 +3,10 @@
 初始化配置命令模块测试
 
 测试覆盖：
-- run_init 静默模式（复制示例 / 生成模板）
+- run_init 静默模式（一律渲染 config_io.template_text 共享模板）
 - run_init 已存在时的行为
 - _cli_cmd 方法
+
 """
 
 from pathlib import Path
@@ -41,12 +42,16 @@ def test_cli_cmd_frozen():
 # ============================================================================
 
 
-def test_run_init_with_example_yaml(tmp_path):
-    """有示例 YAML 时复制示例文件"""
+def test_run_init_ignores_example_files(tmp_path):
+    """静默模式忽略同目录的示例文件，一律渲染共享模板
+
+    示例文件在 EXE / npx 形态下根本不存在，若"有就复制"，同一条命令在源码仓库
+    和打包分发下会产出两份不同的初始配置；模板来源因此收敛到 template_text()。
+    """
     config_file = tmp_path / "jenkins-config.yaml"
-    example_yaml = tmp_path / "jenkins-config.example.yaml"
-    example_yaml.write_text("server:\n  url: http://localhost:8080\n",
-                            encoding="utf-8")
+    (tmp_path / "jenkins-config.example.yaml").write_text(
+        "server:\n  url: http://from-example.invalid\n", encoding="utf-8"
+    )
 
     args = MagicMock()
     args.interactive = False
@@ -54,27 +59,9 @@ def test_run_init_with_example_yaml(tmp_path):
 
     run_init(config_file, args)
 
-    assert config_file.exists()
     content = config_file.read_text(encoding="utf-8")
-    assert "http://localhost:8080" in content
-
-
-def test_run_init_with_example_json(tmp_path):
-    """有示例 JSON（无 YAML）时复制示例 JSON"""
-    config_file = tmp_path / "jenkins-config.yaml"
-    example_json = tmp_path / "jenkins-config.example.json"
-    example_json.write_text('{"server": {"url": "http://localhost:8080"}}',
-                            encoding="utf-8")
-
-    args = MagicMock()
-    args.interactive = False
-    args.force = False
-
-    run_init(config_file, args)
-
-    assert config_file.exists()
-    content = config_file.read_text(encoding="utf-8")
-    assert "http://localhost:8080" in content
+    assert "http://from-example.invalid" not in content
+    assert "your-jenkins-server" in content
 
 
 def test_run_init_generate_template(tmp_path):
@@ -92,6 +79,7 @@ def test_run_init_generate_template(tmp_path):
     assert "server" in content
     assert "url" in content
     assert "environments" in content
+
 
 
 def test_run_init_file_exists_no_force(tmp_path):
@@ -114,12 +102,9 @@ def test_run_init_file_exists_no_force(tmp_path):
 
 
 def test_run_init_file_exists_with_force(tmp_path):
-    """配置文件已存在且有 --force 时覆盖"""
+    """配置文件已存在且有 --force 时覆盖为模板内容"""
     config_file = tmp_path / "jenkins-config.yaml"
     config_file.write_text("old content", encoding="utf-8")
-    example_yaml = tmp_path / "jenkins-config.example.yaml"
-    example_yaml.write_text("server:\n  url: http://new.example.com\n",
-                            encoding="utf-8")
 
     args = MagicMock()
     args.interactive = False
@@ -128,8 +113,9 @@ def test_run_init_file_exists_with_force(tmp_path):
     run_init(config_file, args)
 
     content = config_file.read_text(encoding="utf-8")
-    assert "http://new.example.com" in content
+    assert "your-jenkins-server" in content
     assert "old content" not in content
+
 
 
 def test_run_init_with_interactive_dispatches(tmp_path):
