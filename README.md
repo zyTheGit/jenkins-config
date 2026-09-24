@@ -2,7 +2,9 @@
 
 触发并监控 Jenkins 构建。纯 Python 实现，无 curl / jq 依赖，提供 MCP Server、CLI 与独立可执行文件三种用法。
 
-## MCP Server（AI Agent 集成）
+## 三种使用方式
+
+### 1. MCP Server（AI Agent 集成）
 
 在 MCP 客户端里填这一段即可。启动器首次运行会从 GitHub Release 下载当前平台的预编译二进制（自带 Python 运行时，sha256 校验后缓存复用），所以目标机器只需 Node.js 18+：
 
@@ -59,18 +61,32 @@ environments:
 
 用 `./jenkins-auto-build.sh --init -i` 生成模板。默认放在项目的 `.jenkins-config/` 或用户级 `~/.jenkins-config/`，探测顺序、指定路径的方式与生成文件的落点见 [配置文件文档](docs/configuration.md)。
 
-## CLI 用法
+### 2. 独立可执行文件（CLI，无需 Python）
+
+从 [Release](https://github.com/zyTheGit/jenkins-config/releases) 下载对应平台的 `jenkins-build` 可执行文件，把 `jenkins-config.yaml` 放在同级目录：
 
 ```bash
-./jenkins-auto-build.sh -i          # 交互式选择
-./jenkins-auto-build.sh -e dev      # 构建指定环境
-./jenkins-auto-build.sh --history   # 查看构建历史
+jenkins-build.exe -i          # 交互式选择
+jenkins-build.exe -e dev      # 构建指定环境
+jenkins-build.exe --history   # 查看构建历史
 ```
 
-也可从 [Release](https://github.com/zyTheGit/jenkins-config/releases) 下载独立可执行文件，无需 Python。完整命令见 [CLI 使用指南](docs/cli.md)。
+完整命令见 [CLI 使用指南](docs/cli.md)。
+
+### 3. 源码启动（开发调试）
+
+前置要求：Python 3.10+ 与 [uv](https://docs.astral.sh/uv/)。
+
+```bash
+uv sync                            # 安装依赖
+./jenkins-auto-build.sh -i         # 或 uv run python -m jenkins_config.cli -i
+```
+
+三种方式对比与详细说明见 [三种使用方式](docs/usage.md)。
 
 ## 文档
 
+- [三种使用方式](docs/usage.md) — MCP / EXE / 源码三种交付形态的选择与快速上手
 - [MCP Server](docs/mcp/README.md) — 客户端接入、工具清单、环境变量、写开关与主机白名单
 - [配置文件](docs/configuration.md) — 读取位置、字段说明、`branch_field` 与参数体系
 - [CLI 使用指南](docs/cli.md) — 安装、命令参考、交互流程
