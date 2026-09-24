@@ -12,8 +12,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import jenkins_config.cmd_interactive as ci
 from jenkins_config.cmd_interactive import run_interactive_build
-
 
 # ============================================================================
 # 辅助函数
@@ -56,24 +56,38 @@ def _setup_config_two_projects(tmp_path) -> str:
     return str(config_file)
 
 
+def _to_back(value):
+    return ci._BACK if value == "__ESC__" else value
+
+
 def _run_with_questionary(config_path, args, prompts):
     """
     使用 mock questionary 运行 run_interactive_build。
 
     prompts = {"select": [...], "checkbox": [...], "confirm": True}
+    - select: 列表值表示多次 ask() 的返回序列（每个元素是标量）
+    - checkbox/confirm: 元素为列表时表示多次 ask() 的返回序列
+      （每个元素是一次 ask 的返回值）；标量时为单次 ask 的返回值
+    "__ESC__" 标记转换为 ci._BACK 模拟 ESC。
     """
     patches = []
     for func_name, value in prompts.items():
         mock_obj = MagicMock()
-        if func_name == "select":
-            # select 可能需要多次调用（方法选择 + 环境选择）
-            if isinstance(value, list):
-                mock_obj.ask.side_effect = value
-            else:
-                mock_obj.ask.return_value = value
+        if func_name == "select" and isinstance(value, list):
+            # select: 标量序列
+            mock_obj.ask.side_effect = [_to_back(v) for v in value]
+        elif (
+            isinstance(value, list)
+            and value
+            and all(isinstance(v, list) for v in value)
+        ):
+            # checkbox/confirm: ask 序列，每个元素是一次 ask 的返回值
+            mock_obj.ask.side_effect = [
+                [_to_back(x) for x in v] if isinstance(v, list) else _to_back(v)
+                for v in value
+            ]
         else:
-            # checkbox 返回列表、confirm/text/password 返回标量
-            mock_obj.ask.return_value = value
+            mock_obj.ask.return_value = _to_back(value)
         p = patch(
             f"jenkins_config.cmd_interactive.questionary.{func_name}",
             return_value=mock_obj,
@@ -158,6 +172,17 @@ def test_interactive_cancel_at_method_select(tmp_path):
     assert exc.value.code == 0
 
 
+def test_interactive_esc_at_method_select(tmp_path):
+    """第一步按 ESC -> 重新提问（仍在第一步）"""
+    config_path = _setup_config(tmp_path)
+    # select 第一次 ESC，第二次仍取消 -> exit(0)
+    with pytest.raises(SystemExit) as exc:
+        _run_with_questionary(config_path, MagicMock(), {
+            "select": ["__ESC__", None],
+        })
+    assert exc.value.code == 0
+
+
 def test_interactive_cancel_at_env_select(tmp_path):
     """选择环境时取消 -> exit(0)"""
     config_path = _setup_config(tmp_path)
@@ -206,6 +231,22 @@ def test_interactive_sequential_mode(tmp_path):
     mock_build.assert_called_once()
 
 
+def test_interactive_single_job_auto_parallel(tmp_path):
+    """仅一个 Job 时自动并行，跳过模式选择"""
+    config_path = _setup_config(tmp_path)
+    args = MagicMock()
+
+    with patch("jenkins_config.cmd_build.run_build") as mock_build:
+        _run_with_questionary(config_path, args, {
+            "select": ["by_env", "dev"],  # 只调用两次 select
+            "checkbox": ["__ALL__"],
+            "confirm": True,
+        })
+
+    assert args.mode == "parallel"
+    mock_build.assert_called_once()
+
+
 def test_interactive_cancel_at_confirm(tmp_path):
     """确认构建时取消 -> exit(0)"""
     config_path = _setup_config(tmp_path)
@@ -216,6 +257,91 @@ def test_interactive_cancel_at_confirm(tmp_path):
             "confirm": False,
         })
     assert exc.value.code == 0
+
+
+# ============================================================================
+# ESC 快捷键（回退到上一步）
+# ============================================================================
+
+
+def test_interactive_esc_back_to_method_select(tmp_path):
+    """按环境选择项目时 ESC -> 退回环境选择"""
+    config_path = _setup_config(tmp_path)
+    args = MagicMock()
+
+    with patch("jenkins_config.cmd_build.run_build") as mock_build:
+        _run_with_questionary(config_path, args, {
+            "select": ["by_env", "dev", "dev"],  # 第三次是回退后重新选环境
+            "checkbox": ["__ESC__", "__ALL__"],
+            "confirm": True,
+        })
+
+    assert args.yes is True
+    mock_build.assert_called_once()
+
+
+def test_interactive_esc_back_from_env_to_method(tmp_path):
+    """选择环境时 ESC -> 退回构建方式选择"""
+    config_path = _setup_config(tmp_path)
+    args = MagicMock()
+
+    with patch("jenkins_config.cmd_build.run_build") as mock_build:
+        _run_with_questionary(config_path, args, {
+            "select": ["by_env", "__ESC__", "by_project"],
+            "checkbox": ["dev:app"],
+            "confirm": True,
+        })
+
+    assert args.yes is True
+    mock_build.assert_called_once()
+
+
+def test_interactive_esc_back_from_project_eco_to_method(tmp_path):
+    """按项目选择项目时 ESC -> 退回构建方式选择"""
+    config_path = _setup_config(tmp_path)
+    args = MagicMock()
+
+    with patch("jenkins_config.cmd_build.run_build") as mock_build:
+        _run_with_questionary(config_path, args, {
+            "select": ["by_project", "by_project"],
+            "checkbox": ["__ESC__", "dev:app"],
+            "confirm": True,
+        })
+
+    assert args.yes is True
+    mock_build.assert_called_once()
+
+
+def test_interactive_esc_back_at_build_mode(tmp_path):
+    """构建模式选择时 ESC -> 退回项目选择"""
+    config_path = _setup_config_two_projects(tmp_path)
+    args = MagicMock()
+
+    with patch("jenkins_config.cmd_build.run_build") as mock_build:
+        _run_with_questionary(config_path, args, {
+            "select": ["by_env", "dev", "__ESC__", "sequential"],
+            "checkbox": ["__ALL__", "__ALL__"],  # 回退后重新选择
+            "confirm": True,
+        })
+
+    assert args.mode == "sequential"
+    mock_build.assert_called_once()
+
+
+def test_interactive_esc_back_at_confirm(tmp_path):
+    """确认时 ESC -> 退回项目选择，随后确认构建"""
+    config_path = _setup_config(tmp_path)
+    args = MagicMock()
+
+    with patch("jenkins_config.cmd_build.run_build") as mock_build:
+        _run_with_questionary(config_path, args, {
+            "select": ["by_env", "dev"],
+            "checkbox": ["__ALL__"],
+            "confirm": ["__ESC__", True],
+        })
+
+    assert args.yes is True
+    mock_build.assert_called_once()
 
 
 # ============================================================================
@@ -283,3 +409,29 @@ def test_interactive_by_project_empty_selection(tmp_path):
             "checkbox": [],
         })
     assert exc.value.code == 0
+
+
+# ============================================================================
+# ESC 键绑定安装
+# ============================================================================
+
+
+def test_installed_esc_back_adds_escape_binding():
+    """_install_esc_back 应为 Application 追加 ESC 键绑定"""
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.keys import Keys
+
+    mock_q = MagicMock()
+    kb = KeyBindings()
+    mock_q.application.key_bindings = kb
+
+    before = len(kb.bindings)
+    ci._install_esc_back(mock_q)
+
+    assert len(kb.bindings) == before + 1
+    assert kb.bindings[-1].keys == (Keys.Escape,)
+
+
+def test_install_esc_back_handles_mock_question():
+    """mock 的 question 对象（属性自动创建）不应报错"""
+    ci._install_esc_back(MagicMock())

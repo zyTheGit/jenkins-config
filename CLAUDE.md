@@ -1,6 +1,14 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## 项目概述
+
+Jenkins 自动构建工具，纯 Python 实现，无 curl/jq 依赖。三种交付形态共用一套核心代码：
+
+1. **CLI**（`python -m jenkins_config.cli` / `jenkins-auto-build.sh|.ps1` 包装脚本）
+2. **MCP Server**（`jenkins_config.mcp`，FastMCP API，供 AI Agent 调用）
+3. **npm 启动器**（`npm/`，`@zythegit/jenkins-config-mcp`——首次运行从 GitHub Release 下载平台预编译二进制，Node 只负责引导）
 
 ## Commands
 
@@ -11,157 +19,141 @@ uv run pytest tests/ -v
 # Run with coverage
 uv run pytest tests/ --cov=jenkins_config --cov-report=term-missing -v
 
-# Run single test file
+# Run single test file / single test
 uv run pytest tests/test_builder.py -v
-
-# Run single test
 uv run pytest tests/test_config.py::test_save_yaml -v
 
-# Run CLI directly (uses jenkins-config.yaml by default)
+# Run CLI directly
 uv run python -m jenkins_config.cli --help
 
-# Use shell wrapper (macOS/Linux)
-./jenkins-auto-build.sh -i                  # Interactive mode
-./jenkins-auto-build.sh -e dev -b hotfix    # Build with branch override
-./jenkins-auto-build.sh -r                  # Rebuild last
-
-# Use PowerShell wrapper (Windows)
-./jenkins-auto-build.ps1 -i
+# Run MCP server (requires mcp extra: uv sync --extra mcp)
+uv run python -m jenkins_config.mcp.server
 
 # Package to platform binary
-uv run python build.py                      # Single-file binary (~14 MB)
-uv run python build.py --dir                # Directory mode (faster startup)
-uv run python build.py --clean              # Clean and rebuild
+uv run python build.py              # Single-file binary (~14 MB)
+uv run python build.py --dir        # Directory mode (faster startup)
+uv run python build.py --clean      # Clean and rebuild
 ```
+
+CLAUDE.md 底部的 `--init` / `-h` 等命令行手册以 `cli.py` argparse 为准，勿凭记忆描述参数。
 
 ## Architecture
 
 ```
 jenkins_config/
-├── cli.py                # Entry point — argparse dispatch, config path resolution
-│                         # Lazily imports command modules via `from .cmd_xxx import`
-├── cmd_build.py          # Build execution, rebuild-last, report generation, log cleanup
-├── cmd_init.py           # Config initialization (silent template + `--init -i` guided)
-├── cmd_interactive.py    # Interactive build selection (questionary UI, 4-step flow)
-├── cmd_list.py           # List environments, projects, history, history stats
+├── cli.py                # 入口 — argparse 分发，配置路径解析
+│                         # 每个 if args.xxx 分支内延迟 `from .cmd_xxx import`
+├── cmd_build.py          # 构建执行、rebuild-last、报告生成、日志清理
+├── cmd_init.py           # 配置初始化（静默模板 + `--init -i` 引导）
+├── cmd_interactive.py    # 交互式构建选择（questionary UI，5 步状态机）
+├── cmd_list.py           # 列出环境、项目、历史、历史统计
 │
-├── config_types.py       # Pure dataclasses: Config, ServerConfig, BuildConfig,
-│                         # Environment, Project, Job (no I/O or logic)
-├── config_io.py          # YAML/JSON loading with auto-format detection,
-│                         # saving, template generation, backward compat for old JSON fields
-├── config.py             # Re-exports all types; monkey-patches I/O and business
-│                         # methods (get_jobs, list_environments, etc.) onto Config class
+├── config_types.py       # 纯 dataclass：Config, ServerConfig, BuildConfig,
+│                         # Environment, Project, Job（无 I/O 无逻辑）
+├── config_io.py          # YAML/JSON 加载（自动格式检测）、保存、模板生成、旧 JSON 字段兼容
+├── config.py             # re-export 所有类型；把 I/O 与业务方法（get_jobs 等）
+│                         # monkey-patch 到 Config 类上
 │
-├── builder.py            # Builder class — build_parallel (ThreadPoolExecutor),
-│                         # build_sequential, _build_single (trigger → queue → wait → log)
-├── jenkins.py            # JenkinsClient — HTTP API wrapper via requests:
-│                         # crumb-based CSRF, buildWithParameters, queue polling, consoleText
-├── history.py            # HistoryManager — BuildRecord persistence to JSON,
-│                         # list/stats/get_last_build_group/clear (max 100 records)
+├── paths.py              # 路径解析唯一真源 — CLI 与 MCP 都必须走此模块，
+│                         # 避免两侧锚定规则漂移（源码/EXE 模式候选目录、用户级 ~/.jenkins-config）
+├── filelock.py           # 并发写保护
 │
-├── build_result.py       # BuildResult dataclass (job_key, build_num, status, duration, ...)
-├── build_errors.py       # Error log file generation + error line extraction from console logs
-├── utils.py              # ANSI-colored logging (stderr), print_header/print_sep,
-│                         # format_duration, debug mode
-
-entry_point.py            # EXE entry point (adds project root to sys.path, calls cli.main)
-build.py                  # PyInstaller packaging script
-
-tests/
-├── test_config.py        # Config loading, get_jobs filtering, branch_field priority
-├── test_config_io.py     # YAML/JSON I/O, save/load round-trip, template, param parsing
-├── test_config_business.py  # get_jobs merge logic, create_job_from_record, backward compat
-├── test_jenkins.py       # JenkinsClient mocks: crumb, trigger, queue polling, status
-├── test_builder.py       # Builder with mocked JenkinsClient: success/failure/timeout paths
-├── test_history.py       # BuildRecord CRUD, stats, max_records, corrupted file, clear
-├── test_cli.py           # _resolve_config_path, main dispatch for all command flags
-├── test_cmd_build.py     # _cleanup_old_logs, generate_report (success/mixed/unknown)
-├── test_cmd_build_run.py # run_build + run_rebuild_last (split from test_cmd_build, ≤500 lines)
-├── test_cmd_interactive.py  # Interactive flow with mocked questionary (14 tests)
-├── test_cmd_init.py      # init: silent template, YAML/JSON example, force overwrite
-├── test_cmd_list.py      # list_environments, list_projects, show_history, stats
-├── test_build_errors.py  # save_error_log, extract_error_lines
-├── test_utils.py         # format_duration, print_sep, debug mode
-└── test_*.py             # ~17 test files total, 172 tests, all passing
+├── builder.py            # Builder — build_parallel（ThreadPoolExecutor）、
+│                         # build_sequential、_build_single（trigger → queue → wait → log）
+├── jenkins.py            # JenkinsClient — requests HTTP API 封装：
+│                         # crumb CSRF、buildWithParameters、队列轮询、consoleText
+├── history.py            # HistoryManager — BuildRecord JSON 持久化、
+│                         # list/stats/get_last_build_group/clear（最多 100 条）
+│
+├── build_result.py       # BuildResult dataclass
+├── build_errors.py       # 错误日志文件生成 + 从控制台日志提取错误行
+├── utils.py              # ANSI 彩色日志（stderr）、print_header/print_sep、format_duration
+│
+├── mcp/                  # FastMCP Server（延迟导入 mcp，未装 extra 也可导入）
+│   ├── server.py         # 入口：日志只走 stderr（stdout 是 JSON-RPC 通道）
+│   ├── utils.py          # 14 个 MCP Tools 共享逻辑：配置加载、错误返回载荷
+│   ├── errors.py         # 错误码分类 → 可行动失败载荷
+│   ├── resources.py      # Resources（配置数据）
+│   └── prompts.py        # Prompts（交互模板）
+│
+├── entry_point.py        # EXE 入口（sys.path 加项目根，调 cli.main）
+build.py                  # PyInstaller 打包脚本
+npm/                      # npm 启动器（bin/ + package.json，发布为 @zythegit/jenkins-config-mcp）
 ```
 
-## Key patterns
+## 关键模式
 
-### Modular command dispatch
-`cli.py` uses lazy `from .cmd_xxx import xxx` inside each `if args.xxx:` branch. This keeps startup fast and avoids circular imports. When testing `main()`, patch at the **source module** (e.g., `jenkins_config.cmd_list.list_environments`) rather than `jenkins_config.cli.list_environments` since imports are lazy.
+### 模块化命令分发
+`cli.py` 在每个分支内延迟 `from .cmd_xxx import xxx`，启动快且避免循环导入。测试 `main()` 时必须 patch **源模块**（如 `jenkins_config.cmd_list.list_environments`），而非 `jenkins_config.cli.list_environments`。
 
-### Config class pattern
-Dataclass definitions live in `config_types.py`. I/O methods live in `config_io.py`. Business methods live in `config.py`. Both are monkey-patched onto the `Config` dataclass:
+### Config 类模式
+数据类在 `config_types.py`，I/O 方法在 `config_io.py`，业务方法在 `config.py`，后两者 monkey-patch 到 Config 上：
 ```python
-# config.py
 Config.load = classmethod(lambda cls, path: _load_config(path))
 Config.get_jobs = _get_jobs
 ```
-This preserves the `Config.load()` call API while keeping the source files under 500 lines each.
+保持 `Config.load()` 调用 API 不变，同时单文件控制在 500 行内。
 
-### Dynamic params (no hardcoded fields)
-All Jenkins build parameters go through `params: dict` — no `branch`, `git_param`, or `default_branch` fields:
-- `Config.branch_field: str = "branch"` — tells CLI `-b` which param key to override
-- `Environment.branch_field: str = ""` — per-env override of the global branch_field
-- `Job.branch` is a **derived** field (populated from `params[branch_field]` at `get_jobs()` time)
-- Adding a new Jenkins plugin parameter needs zero Python code changes
+### 路径解析（paths.py 是唯一真源）
+锚定规则：绝对路径原样用；相对路径按运行模式在候选目录中查找；未指定时按 `CONFIG_FILE_NAMES` 顺序探测。用户级目录三平台统一为 `~/.jenkins-config`。`JENKINS_MCP_CONFIG` 只对 MCP 生效，paths 模块自动探测不读它——修改路径逻辑时两侧都不要自行实现。
 
-**Backward compat**: Old JSON configs with `branch`, `git_param`, `default_branch` fields still load correctly with deprecation warnings. Params support both dict format (`{BRANCH: develop}`) and legacy string format (`"BRANCH=develop&skip_tests=false"`).
+### 动态 params（无硬编码字段）
+所有 Jenkins 构建参数走 `params: dict`，没有 `branch`/`git_param`/`default_branch` 字段：
+- `Config.branch_field: str = "branch"` — 告诉 CLI `-b` 覆盖哪个 param key
+- `Environment.branch_field: str = ""` — per-env 覆盖全局 branch_field
+- `Job.branch` 是**派生字段**（`get_jobs()` 时从 `params[branch_field]` 填充）
+- 新增 Jenkins 插件参数零代码改动
 
-**Param merge priority** (in `get_jobs()`):
-CLI `-p` > project `params` > env `params` (simple `dict.update()` chain)
+**向后兼容**：旧 JSON 配置的 `branch`/`git_param`/`default_branch` 仍可加载（带弃用警告）。params 兼容 dict 与字符串（`"KEY=val&k2=v2"`）两种格式。
 
-### Config path resolution
-- Source mode: resolves relative paths from the project root (`__file__.parent.parent`)
-- EXE mode (PyInstaller): tries cwd first, then exe directory, falls back to cwd
+**合并优先级**（`get_jobs()`）：CLI `-p` > project `params` > env `params`（`dict.update()` 链）。
 
-### Build flow (`builder.py`)
-Single Job: `trigger_build()` → `get_build_number()` (queue polling) → `_wait_for_build()` (status polling loop) → `get_build_log()` → save log → `BuildResult`
+### MCP Server 特殊约束
+- `stdout` 是 JSON-RPC 通道，**任何** print/log 到 stdout 都会破坏协议；日志走 stderr 或 `JENKINS_MCP_LOG_FILE`
+- 默认只读，`JENKINS_MCP_ALLOW_WRITE=1` 才放行写操作
+- 工具失败返回可行动载荷（`mcp/errors.py` 的 `failure_payload`），不伪造业务数据
+- 写入分级闸门：`init_config` 等写工具需用户确认（详见 `docs/mcp/README.md`）
 
-Parallel: `ThreadPoolExecutor` + `as_completed`. Sequential: simple for-loop.
+### 构建流程（builder.py）
+单 Job：`trigger_build()` → `get_build_number()`（队列轮询）→ `_wait_for_build()`（状态轮询）→ `get_build_log()` → 存日志 → `BuildResult`。并行用 `ThreadPoolExecutor` + `as_completed`。
 
-### Interactive mode (`cmd_interactive.py`)
-4-step questionary flow: (1) build method (by-env/by-project) → (2) project selection → (3) build mode (parallel/sequential) → (4) confirmation. Single project auto-skips step 3.
+### 交互模式（cmd_interactive.py）
+状态机流程，每步 ESC 可回退：① 构建方式（按环境/按项目）→ ② 环境 → ③ 项目选择 → ④ 构建模式 → ⑤ 确认。单项目自动跳过第 4 步（确认处 ESC 回到第 3 步）。`_install_esc_back()` 在每个问题 `.ask()` 前向 prompt_toolkit `Application` 追加 Escape 绑定；ESC 返回 `_BACK` 哨兵，Ctrl+C/Q 或 EOF 退出。
 
-### Testing patterns
-- **pytest + unittest.mock** — `Mock(spec=JenkinsClient)` for builder tests, `tmp_path` fixture for file I/O
-- **questionary mocking** — patch the factory function (`questionary.select`, `.checkbox`, `.confirm`), set `.ask.return_value` or `.ask.side_effect` for multiple calls
-- **Lazy import patching** — for CLI tests, patch at the source module (`jenkins_config.cmd_build.run_build`) since cli.py uses lazy imports
-- **Log output assertion** — `print_header()` outputs to stderr; use `capsys.readouterr().err`
-- **File encoding** — `Path.write_text()` on Windows must use `encoding="utf-8"` explicitly (GBK default)
-- **500-line limit** — test files are split by topic when they exceed 500 lines
+### 测试模式
+- **pytest + unittest.mock** — builder 测试用 `Mock(spec=JenkinsClient)`，文件 I/O 用 `tmp_path`
+- **questionary mocking** — patch 工厂函数（`questionary.select` `.checkbox` `.confirm`），用 `.ask.return_value` / `.ask.side_effect` 模拟多次调用
+- **嵌套工具测试不依赖本机配置** — 测试需自备 tmp 配置，不要读取用户机器上真实存在的 `jenkins-config.yaml`
+- **日志断言** — `print_header()` 输出到 stderr，用 `capsys.readouterr().err`
+- **文件编码** — Windows 上 `Path.write_text()` 必须显式 `encoding="utf-8"`（默认 GBK）
+- **500 行上限** — 源文件 / 测试文件超限时按主题拆分（如 `test_cmd_build.py` 与 `test_cmd_build_run.py`）
+- 当前共 ~20 个测试文件、650+ 用例；新增功能必须带测试
 
-### Error handling
-When a build fails to trigger or queue times out, `save_error_log()` writes a structured `.log` file with diagnostics and troubleshooting suggestions. `extract_error_lines()` searches console logs for known error keywords.
+## 错误处理
+
+构建触发失败或队列出队超时时，`save_error_log()` 写入结构化 `.log`（含诊断与排查建议）。`extract_error_lines()` 在控制台日志中按已知错误关键字提取关键行。
+
+## 数据持久化
+
+- `data/build_history.json` — 构建记录，路径相对配置文件父目录解析。首次使用自动创建，最多 100 条
+- `jenkins_logs/`（可经 `build.log_dir` 配置）— 日志按 `build_YYYYMMDD/` 子目录存放，`_cleanup_old_logs()` 按 `log_retention_days` 自动清理
+
+## 配置文件格式
+
+默认 `jenkins-config.yaml`（支持注释）。`.json` 仍全量兼容加载。带注释示例在 `jenkins-config.example.yaml`；`--init` 生成模板，`--help-config` 查看字段说明。模板统一从 `config_io.py` 的单一来源生成。
 
 ## Agent skills
 
-### Issue tracker
+- **Issue tracker** — GitHub Issues via `gh` CLI，见 `docs/agents/issue-tracker.md`
+- **Triage labels** — 五角色词汇：needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix，见 `docs/agents/triage-labels.md`
+- **Domain docs** — 单上下文布局：仓库根 `CONTEXT.md` + `docs/adr/`，见 `docs/agents/domain.md`
 
-Issues tracked in GitHub Issues via `gh` CLI. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-Default five-role vocabulary: needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix. See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Single-context layout — one `CONTEXT.md` + `docs/adr/` at repo root. See `docs/agents/domain.md`.
-
-## Dependencies
+## 依赖
 
 - `requests>=2.28.0` — Jenkins HTTP API
-- `questionary>=2.0.0` — interactive terminal UI (checkbox, select, confirm, text, password)
-- `pyyaml>=6.0` — YAML config loading/saving (supports comments in config files)
-- `pillow` — app icon processing (optional, build-time only)
-- `prompt_toolkit` — transitive via questionary; imported eagerly in interactive mode for Windows startup perf
+- `questionary>=2.0.0` — 交互式终端 UI
+- `pyyaml>=6.0` — YAML 配置读写
+- `pillow` — 应用图标处理（可选，仅打包时）
+- `prompt_toolkit` — questionary 传递依赖；交互模式为 Windows 启动性能会急切导入
+- `mcp`（extra）— MCP Server，延迟导入
 - dev: `pytest>=7.0.0`, `pytest-cov>=7.1.0`, `pyinstaller>=6.0.0`, `colorama>=0.4.6`
-
-## Data persistence
-
-- `data/build_history.json` — build records stored relative to config file parent. Auto-created on first use. Max 100 records.
-- `jenkins_logs/` (configurable via `build.log_dir`) — build logs in `build_YYYYMMDD/` subdirectories. Old logs auto-cleaned after `log_retention_days` by `_cleanup_old_logs()`.
-
-## Config file format
-
-Default: `jenkins-config.yaml` (supports comments). JSON files (`.json`) still load with full backward compatibility. Example config with YAML comments at `jenkins-config.example.yaml`. Generate a template with `--init` or view the field reference with `--help-config`.
