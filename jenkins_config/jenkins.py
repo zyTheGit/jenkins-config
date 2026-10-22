@@ -22,7 +22,7 @@ import time
 from enum import Enum
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 import requests
@@ -31,6 +31,9 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from .utils import log_debug, log_warn, is_debug_mode
+
+if TYPE_CHECKING:
+    from .config_types import Config
 
 # Git Parameter 插件的 _class 标识
 _GIT_PARAM_CLASS = "GitParameterDefinition"
@@ -182,6 +185,29 @@ class JenkinsClient:
         # 缓存 CSRF Crumb
         self._crumb_cache: tuple[str, str] | None = None
         self._crumb_time: float = 0
+
+    @classmethod
+    def from_config(cls, config: Config) -> JenkinsClient:
+        """根据 Config 创建客户端，超时统一取 config.build.curl_timeout
+
+        CLI 与 MCP Server 的连接参数只能从这里推导，避免某个调用点
+        退回客户端默认超时。
+
+        Args:
+            config: Config 实例
+
+        Returns:
+            JenkinsClient 实例
+
+        Example:
+            >>> client = JenkinsClient.from_config(config)  # doctest: +SKIP
+        """
+        return cls(
+            url=config.server.url,
+            token=config.server.token,
+            username=config.server.username,
+            timeout=config.build.curl_timeout,
+        )
 
     # ========================================================================
     # 资源管理：显式关闭底层 Session

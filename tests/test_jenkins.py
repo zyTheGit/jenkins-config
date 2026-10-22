@@ -9,6 +9,26 @@ def client():
     return JenkinsClient("http://localhost:8080", "test-token", "admin")
 
 
+def test_from_config_uses_server_and_curl_timeout():
+    """客户端构造只从 Config 推导连接参数与超时"""
+    from jenkins_config.config_types import BuildConfig, Config, ServerConfig
+
+    config = Config(
+        server=ServerConfig(
+            url="http://jenkins:8080", username="builder", token="secret"
+        ),
+        build=BuildConfig(curl_timeout=17),
+    )
+
+    client = JenkinsClient.from_config(config)
+    try:
+        assert client.base_url == "http://jenkins:8080"
+        assert client.session.auth == ("builder", "secret")
+        assert client.timeout == 17
+    finally:
+        client.close()
+
+
 def _mock_crumb(mock_get):
     """配置 mock_get 返回 crumb"""
     mock_get.return_value.json.side_effect = [

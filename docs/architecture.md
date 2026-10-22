@@ -27,7 +27,7 @@ jenkins-config/
 │   ├── config.py               # 配置业务方法（猴子补丁）
 │   ├── paths.py                # 配置/历史路径锚定（CLI 与 MCP 共用）
 │   ├── filelock.py             # 跨进程文件锁 + 原子写
-│   ├── builder.py              # 构建编排（并行/顺序）
+│   ├── build_flow.py           # 构建流程（选择/阻塞/队列，CLI 与 MCP 共用）
 │   ├── jenkins.py              # Jenkins API 客户端
 │   ├── history.py              # 构建历史
 │   ├── build_result.py         # 构建结果数据类
@@ -54,8 +54,8 @@ MCP Server 内部结构见 [MCP Server 文档](mcp/README.md)。
         ┌─────────────────────┼─────────────────────┐
         ▼                     ▼                     ▼
 ┌───────────────┐   ┌───────────────┐   ┌───────────────┐
-│ config_types  │   │  builder.py   │   │  history.py   │
-│ config_io     │   │  (构建编排)   │   │  (历史记录)   │
+│ config_types  │   │ build_flow.py │   │  history.py   │
+│ config_io     │   │ (构建流程)    │   │  (历史记录)   │
 │ config.py     │   └───────────────┘   └───────────────┘
 │ (配置加载)    │           │
 └───────────────┘           ▼

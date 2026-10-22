@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from jenkins_config.cmd_build import run_build, run_rebuild_last
+from jenkins_config.build_flow import BlockingOutcome
 from jenkins_config.build_result import BuildResult
 from jenkins_config.jenkins import BuildStatus
 
@@ -30,7 +31,7 @@ def test_run_build_success(tmp_path, capsys):
     with (
         patch("jenkins_config.cmd_build.Config.load") as mock_load,
         patch("jenkins_config.cmd_build.JenkinsClient"),
-        patch("jenkins_config.cmd_build.Builder") as mock_builder_cls,
+        patch("jenkins_config.cmd_build.run_blocking") as mock_run_blocking,
         patch("jenkins_config.cmd_build.HistoryManager"),
         patch("jenkins_config.cmd_build._cleanup_old_logs"),
     ):
@@ -52,14 +53,11 @@ def test_run_build_success(tmp_path, capsys):
         job.params = {}
         mock_config.get_jobs.return_value = [job]
 
-        mock_builder = MagicMock()
-        mock_builder_cls.return_value = mock_builder
-
         result = BuildResult(job_key="dev_app", build_num=42,
                              status=BuildStatus.SUCCESS, duration=60,
                              log_file="/tmp/log", branch="main",
                              params={}, project_name="app")
-        mock_builder.build_parallel.return_value = [result]
+        mock_run_blocking.return_value = BlockingOutcome(results=[result])
 
         run_build(config_file, args)
 
@@ -111,7 +109,7 @@ def test_run_build_with_branch_override(tmp_path):
     with (
         patch("jenkins_config.cmd_build.Config.load") as mock_load,
         patch("jenkins_config.cmd_build.JenkinsClient"),
-        patch("jenkins_config.cmd_build.Builder") as mock_builder_cls,
+        patch("jenkins_config.cmd_build.run_blocking") as mock_run_blocking,
         patch("jenkins_config.cmd_build.HistoryManager"),
         patch("jenkins_config.cmd_build._cleanup_old_logs"),
     ):
@@ -130,13 +128,11 @@ def test_run_build_with_branch_override(tmp_path):
         job.params = {"branch": "develop"}
         mock_config.get_jobs.return_value = [job]
 
-        mock_builder = MagicMock()
-        mock_builder_cls.return_value = mock_builder
         result = BuildResult(job_key="dev_app", build_num=42,
                              status=BuildStatus.SUCCESS, duration=60,
                              log_file="", branch="hotfix",
                              params={"branch": "hotfix"}, project_name="app")
-        mock_builder.build_parallel.return_value = [result]
+        mock_run_blocking.return_value = BlockingOutcome(results=[result])
 
         run_build(config_file, args)
 
@@ -159,7 +155,7 @@ def test_run_build_with_params_override(tmp_path):
     with (
         patch("jenkins_config.cmd_build.Config.load") as mock_load,
         patch("jenkins_config.cmd_build.JenkinsClient"),
-        patch("jenkins_config.cmd_build.Builder") as mock_builder_cls,
+        patch("jenkins_config.cmd_build.run_blocking") as mock_run_blocking,
         patch("jenkins_config.cmd_build.HistoryManager"),
         patch("jenkins_config.cmd_build._cleanup_old_logs"),
     ):
@@ -178,20 +174,95 @@ def test_run_build_with_params_override(tmp_path):
         job.params = {"branch": "develop"}
         mock_config.get_jobs.return_value = [job]
 
-        mock_builder = MagicMock()
-        mock_builder_cls.return_value = mock_builder
         result = BuildResult(job_key="dev_app", build_num=42,
                              status=BuildStatus.SUCCESS, duration=60,
                              log_file="", branch="develop",
                              params={"branch": "develop", "APP_VERSION": "2.0",
                                      "SKIP_TESTS": "true"},
                              project_name="app")
-        mock_builder.build_parallel.return_value = [result]
+        mock_run_blocking.return_value = BlockingOutcome(results=[result])
 
         run_build(config_file, args)
 
     assert job.params["APP_VERSION"] == "2.0"
     assert job.params["SKIP_TESTS"] == "true"
+
+
+def test_run_build_with_json_params_override(tmp_path):
+    """CLI -p 支持 JSON 对象"""
+    config_file = tmp_path / "jenkins-config.yaml"
+    config_file.write_text("dummy", encoding="utf-8")
+    args = MagicMock()
+    args.mode = "parallel"
+    args.env = "dev"
+    args.jobs = None
+    args.branch = None
+    args.params = '{"APP_VERSION": "2.0", "SKIP_TESTS": true}'
+    args.yes = True
+
+    with (
+        patch("jenkins_config.cmd_build.Config.load") as mock_load,
+        patch("jenkins_config.cmd_build.JenkinsClient"),
+        patch("jenkins_config.cmd_build.run_blocking") as mock_run_blocking,
+        patch("jenkins_config.cmd_build.HistoryManager"),
+        patch("jenkins_config.cmd_build._cleanup_old_logs"),
+    ):
+        mock_config = MagicMock()
+        mock_config.build.log_dir = str(tmp_path)
+        mock_config.build.log_retention_days = 3
+        mock_load.return_value = mock_config
+
+        job = MagicMock()
+        job.key = "dev_app"
+        job.env = "dev"
+        job.path = "app-job"
+        job.branch = "main"
+        job.params = {"branch": "develop"}
+        mock_config.get_jobs.return_value = [job]
+
+        mock_run_blocking.return_value = BlockingOutcome(results=[
+            BuildResult(job_key="dev_app", build_num=42,
+                        status=BuildStatus.SUCCESS, duration=60,
+                        log_file="", branch="develop", params={},
+                        project_name="app")
+        ])
+
+        run_build(config_file, args)
+
+    assert job.params["APP_VERSION"] == "2.0"
+    assert job.params["SKIP_TESTS"] == "true"
+
+
+def test_run_build_invalid_json_params_fails_before_confirm(tmp_path):
+    """非法 JSON 参数在确认提示之前报错退出"""
+    config_file = tmp_path / "jenkins-config.yaml"
+    config_file.write_text("dummy", encoding="utf-8")
+    args = MagicMock()
+    args.env = "dev"
+    args.jobs = None
+    args.branch = None
+    args.params = "{invalid json}"
+    args.yes = False
+
+    with (
+        patch("jenkins_config.cmd_build.Config.load") as mock_load,
+        patch("builtins.input") as mock_input,
+    ):
+        mock_config = MagicMock()
+        job = MagicMock()
+        job.key = "dev_app"
+        job.env = "dev"
+        job.path = "app-job"
+        job.branch = "main"
+        job.params = {}
+        mock_config.get_jobs.return_value = [job]
+        mock_load.return_value = mock_config
+
+        with pytest.raises(SystemExit) as exc:
+            run_build(config_file, args)
+
+    assert exc.value.code == 1
+    mock_input.assert_not_called()
 
 
 def test_run_build_user_cancels(tmp_path):
@@ -269,7 +340,7 @@ def test_run_build_yes_skip_confirm(tmp_path):
     with (
         patch("jenkins_config.cmd_build.Config.load") as mock_load,
         patch("jenkins_config.cmd_build.JenkinsClient"),
-        patch("jenkins_config.cmd_build.Builder") as mock_builder_cls,
+        patch("jenkins_config.cmd_build.run_blocking") as mock_run_blocking,
         patch("jenkins_config.cmd_build.HistoryManager"),
         patch("jenkins_config.cmd_build._cleanup_old_logs"),
     ):
@@ -290,17 +361,15 @@ def test_run_build_yes_skip_confirm(tmp_path):
         mock_config.get_jobs.return_value = [job]
 
 
-        mock_builder = MagicMock()
-        mock_builder_cls.return_value = mock_builder
-        mock_builder.build_parallel.return_value = [
+        mock_run_blocking.return_value = BlockingOutcome(results=[
             BuildResult(job_key="dev_app", build_num=42,
                         status=BuildStatus.SUCCESS, duration=60,
                         log_file="", branch="main", params={}, project_name="app")
-        ]
+        ])
 
         run_build(config_file, args)
 
-    mock_builder.build_parallel.assert_called_once()
+    mock_run_blocking.assert_called_once()
 
 
 # ============================================================================
@@ -317,7 +386,7 @@ def test_run_rebuild_last_success(tmp_path, capsys):
         patch("jenkins_config.cmd_build.Config.load") as mock_load,
         patch("jenkins_config.cmd_build.HistoryManager") as mock_hist_cls,
         patch("jenkins_config.cmd_build.JenkinsClient"),
-        patch("jenkins_config.cmd_build.Builder") as mock_builder_cls,
+        patch("jenkins_config.cmd_build.run_blocking") as mock_run_blocking,
         patch("jenkins_config.cmd_build._cleanup_old_logs"),
     ):
         mock_config = MagicMock()
@@ -344,13 +413,11 @@ def test_run_rebuild_last_success(tmp_path, capsys):
         args.mode = "parallel"
         args.yes = True
 
-        mock_builder = MagicMock()
-        mock_builder_cls.return_value = mock_builder
         result = BuildResult(job_key="dev_app", build_num=43,
                              status=BuildStatus.SUCCESS, duration=60,
                              log_file="", branch="main", params={},
                              project_name="app")
-        mock_builder.build_parallel.return_value = [result]
+        mock_run_blocking.return_value = BlockingOutcome(results=[result])
 
         run_rebuild_last(config_file, args)
 

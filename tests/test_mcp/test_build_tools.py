@@ -77,7 +77,7 @@ def test_trigger_build_success(mock_config, sample_jobs):
         mock_client = Mock()
         mock_client.trigger_build.return_value = ("http://jenkins/queue/item/1/", "")
         mock_client.get_build_number.return_value = 123
-        MockClient.return_value = mock_client
+        MockClient.from_config.return_value = mock_client
 
         from jenkins_config.mcp.tools.build_tools import trigger_build
         result = trigger_build(env="dev")
@@ -112,7 +112,7 @@ def test_trigger_build_with_branch_override(mock_config, sample_jobs):
         mock_client = Mock()
         mock_client.trigger_build.return_value = ("http://jenkins/queue/item/1/", "")
         mock_client.get_build_number.return_value = 456
-        MockClient.return_value = mock_client
+        MockClient.from_config.return_value = mock_client
 
         from jenkins_config.mcp.tools.build_tools import trigger_build
         trigger_build(env="dev", branch="feature/new-feature")
@@ -136,7 +136,7 @@ def test_trigger_build_with_project_filter(mock_config):
         mock_client = Mock()
         mock_client.trigger_build.return_value = ("http://jenkins/queue/item/1/", "")
         mock_client.get_build_number.return_value = 100
-        MockClient.return_value = mock_client
+        MockClient.from_config.return_value = mock_client
 
         from jenkins_config.mcp.tools.build_tools import trigger_build
         result = trigger_build(env="dev", projects="project-a")
@@ -157,7 +157,7 @@ def test_trigger_build_with_extra_params(mock_config, sample_jobs):
         mock_client = Mock()
         mock_client.trigger_build.return_value = ("http://jenkins/queue/item/1/", "")
         mock_client.get_build_number.return_value = 200
-        MockClient.return_value = mock_client
+        MockClient.from_config.return_value = mock_client
 
         from jenkins_config.mcp.tools.build_tools import trigger_build
         trigger_build(env="dev", params='{"SKIP_TESTS": "true"}')
@@ -190,7 +190,7 @@ def test_trigger_build_reports_skipped_params(mock_config, sample_jobs):
         mock_client = Mock()
         mock_client.trigger_build.return_value = ("http://jenkins/queue/item/1/", "")
         mock_client.get_build_number.return_value = 1
-        MockClient.return_value = mock_client
+        MockClient.from_config.return_value = mock_client
 
         from jenkins_config.mcp.tools.build_tools import trigger_build
         result = trigger_build(env="dev", params='{"OK": "1", "LIST": [1, 2]}')
@@ -208,7 +208,7 @@ def test_trigger_build_skips_probe_when_disabled(mock_config, sample_jobs):
 
         mock_client = Mock()
         mock_client.trigger_build.return_value = ("http://jenkins/queue/item/1/", "")
-        MockClient.return_value = mock_client
+        MockClient.from_config.return_value = mock_client
 
         from jenkins_config.mcp.tools.build_tools import trigger_build
         result = trigger_build(env="dev", wait_build_num=False)
@@ -223,15 +223,13 @@ def test_trigger_build_reports_history_write_failure(mock_config, sample_jobs):
 
     with patch("jenkins_config.mcp.tools.build_tools.get_config", return_value=mock_config), \
          patch("jenkins_config.jenkins.JenkinsClient") as MockClient, \
-         patch(
-             "jenkins_config.mcp.tools.build_tools._record_triggered",
-             side_effect=OSError("disk full"),
-         ):
+         patch("jenkins_config.history.HistoryManager") as MockHistory:
 
+        MockHistory.return_value.add_batch.side_effect = OSError("disk full")
         mock_client = Mock()
         mock_client.trigger_build.return_value = ("http://jenkins/queue/item/1/", "")
         mock_client.get_build_number.return_value = 1
-        MockClient.return_value = mock_client
+        MockClient.from_config.return_value = mock_client
 
         from jenkins_config.mcp.tools.build_tools import trigger_build
         result = trigger_build(env="dev")
@@ -260,7 +258,7 @@ def test_trigger_build_partial_failure(mock_config, sample_jobs):
             (None, "状态码: 404"),
         ]
         mock_client.get_build_number.return_value = 123
-        MockClient.return_value = mock_client
+        MockClient.from_config.return_value = mock_client
 
         from jenkins_config.mcp.tools.build_tools import trigger_build
         result = trigger_build(env="dev")
@@ -280,7 +278,7 @@ def test_trigger_build_no_queue_url(mock_config, sample_jobs):
 
         mock_client = Mock()
         mock_client.trigger_build.return_value = (None, None)
-        MockClient.return_value = mock_client
+        MockClient.from_config.return_value = mock_client
 
         from jenkins_config.mcp.tools.build_tools import trigger_build
         result = trigger_build(env="dev")
@@ -298,7 +296,7 @@ def test_trigger_build_exception(mock_config, sample_jobs):
 
         mock_client = Mock()
         mock_client.trigger_build.side_effect = Exception("Connection refused")
-        MockClient.return_value = mock_client
+        MockClient.from_config.return_value = mock_client
 
         from jenkins_config.mcp.tools.build_tools import trigger_build
         result = trigger_build(env="dev")
@@ -410,7 +408,7 @@ def test_rebuild_last_config_mode_success(mock_config):
         mock_client = Mock()
         mock_client.trigger_build.return_value = ("http://jenkins/queue/item/1/", "")
         mock_client.get_build_number.return_value = 101
-        MockClient.return_value = mock_client
+        MockClient.from_config.return_value = mock_client
 
         from jenkins_config.mcp.tools.build_tools import rebuild_last
         result = rebuild_last()
@@ -514,73 +512,6 @@ def test_rebuild_last_direct_mode_history_missing(tmp_path):
 
 
 # ============================================================================
-# 辅助函数测试
-# ============================================================================
-
-
-def test_parse_params_json():
-    """验证 JSON 格式参数解析"""
-    from jenkins_config.mcp.tools.build_tools import _parse_params_string
-
-    parsed, skipped = _parse_params_string('{"BRANCH": "develop", "SKIP_TESTS": "true"}')
-    assert parsed == {"BRANCH": "develop", "SKIP_TESTS": "true"}
-    assert skipped == []
-
-
-def test_parse_params_url_encoded():
-    """验证 URL 编码格式参数解析（复用 config_io 的实现）"""
-    from jenkins_config.mcp.tools.build_tools import _parse_params_string
-
-    parsed, skipped = _parse_params_string("BRANCH=develop&SKIP_TESTS=true")
-    assert parsed == {"BRANCH": "develop", "SKIP_TESTS": "true"}
-    assert skipped == []
-
-
-def test_parse_params_empty():
-    """验证空字符串参数解析返回空字典"""
-    from jenkins_config.mcp.tools.build_tools import _parse_params_string
-
-    assert _parse_params_string("") == ({}, [])
-    assert _parse_params_string("  ") == ({}, [])
-
-
-def test_parse_params_invalid_json_raises():
-    """验证以 { 开头的非法 JSON 直接抛错，不再静默回退"""
-    from jenkins_config.mcp.tools.build_tools import _parse_params_string
-
-    with pytest.raises(ValueError, match="不是合法的 JSON"):
-        _parse_params_string("{invalid json}")
-
-
-def test_parse_params_json_object_required():
-    """验证 { 开头但不是对象的 JSON 被拒绝"""
-    from jenkins_config.mcp.tools.build_tools import _parse_params_string
-
-    with pytest.raises(ValueError, match="不是合法的 JSON"):
-        _parse_params_string('{"a": 1')
-
-
-def test_parse_params_json_non_string_values():
-    """验证 JSON 中的非字符串值被转为字符串，布尔值转小写"""
-    from jenkins_config.mcp.tools.build_tools import _parse_params_string
-
-    parsed, skipped = _parse_params_string('{"SKIP_TESTS": true, "RETRY": false, "COUNT": 3}')
-    assert parsed == {"SKIP_TESTS": "true", "RETRY": "false", "COUNT": "3"}
-    assert skipped == []
-
-
-def test_parse_params_skips_null_and_non_scalar():
-    """验证 JSON 中的 null、列表、字典被跳过并在 skipped 中回传"""
-    from jenkins_config.mcp.tools.build_tools import _parse_params_string
-
-    parsed, skipped = _parse_params_string(
-        '{"EMPTY": null, "LIST": [1, 2], "DICT": {"x": 1}, "OK": "ok", "NUM": 5}'
-    )
-    assert parsed == {"OK": "ok", "NUM": "5"}
-    assert sorted(skipped) == ["DICT", "EMPTY", "LIST"]
-
-
-# ============================================================================
 # 修复验证：默认历史路径 / 探测超时 / BUILDING 占位 / 前缀守卫等
 # ============================================================================
 
@@ -651,7 +582,7 @@ def test_trigger_config_mode_probe_timeout_capped_at_15(mock_config, sample_jobs
         mock_client = Mock()
         mock_client.trigger_build.return_value = ("http://jenkins/queue/item/1/", "")
         mock_client.get_build_number.return_value = 123
-        MockClient.return_value = mock_client
+        MockClient.from_config.return_value = mock_client
 
         from jenkins_config.mcp.tools.build_tools import trigger_build
         trigger_build(env="dev")
@@ -672,44 +603,12 @@ def test_trigger_config_mode_probe_timeout_uses_small_queue_timeout(mock_config,
         mock_client = Mock()
         mock_client.trigger_build.return_value = ("http://jenkins/queue/item/1/", "")
         mock_client.get_build_number.return_value = 123
-        MockClient.return_value = mock_client
+        MockClient.from_config.return_value = mock_client
 
         from jenkins_config.mcp.tools.build_tools import trigger_build
         trigger_build(env="dev")
 
         assert mock_client.get_build_number.call_args.kwargs["timeout"] == 5
-
-
-def test_record_build_num_zero_when_number_not_assigned(tmp_path):
-    """验证 get_build_number 返回 None 时记录以 build_num=0 落盘且字段正确"""
-    from jenkins_config.history import HistoryManager
-
-    hist_file = str(tmp_path / "build_history.json")
-    job = Job(
-        key="dev_project_a", path="project-a", branch="develop",
-        params={"branch": "develop"}, env="dev", project_name="project-a",
-    )
-
-    client = Mock()
-    client.trigger_build.return_value = ("http://jenkins/queue/item/1/", "")
-    client.get_build_number.return_value = None
-
-    from jenkins_config.mcp.tools.build_tools import _trigger_jobs_with_client
-    result = _trigger_jobs_with_client(client, [job], hist_file)
-
-    assert len(result["triggered"]) == 1
-    assert result["triggered"][0]["build_num"] is None
-
-    # 验证落盘记录：存在且字段正确（build_num=0、status=BUILDING）
-    records = HistoryManager(hist_file).list(limit=10)
-    assert len(records) == 1
-    record = records[0]
-    assert record.build_num == 0
-    assert record.status == "BUILDING"
-    assert record.job_key == "dev_project_a"
-    assert record.env == "dev"
-    assert record.branch == "develop"
-    assert record.project_name == "project-a"
 
 
 def test_triggered_entries_contain_placeholder_note(mock_config, sample_jobs):
@@ -723,7 +622,7 @@ def test_triggered_entries_contain_placeholder_note(mock_config, sample_jobs):
         mock_client = Mock()
         mock_client.trigger_build.return_value = ("http://jenkins/queue/item/1/", "")
         mock_client.get_build_number.return_value = 123
-        MockClient.return_value = mock_client
+        MockClient.from_config.return_value = mock_client
 
         from jenkins_config.mcp.tools.build_tools import trigger_build
         result = trigger_build(env="dev")
@@ -805,30 +704,3 @@ def test_rebuild_last_direct_mode_writes_history(tmp_path):
         assert written[0].project_name == "project-a"
 
 
-def test_record_triggered_uses_custom_branch_field(tmp_path):
-    """验证 _record_triggered 通过 branch_field_for 按环境解析分支字段"""
-    from jenkins_config.history import HistoryManager
-
-    hist_file = str(tmp_path / "build_history.json")
-    job = Job(
-        key="dev_project_a", path="project-a", branch="feat/x",
-        params={"BRANCH_NAME": "feat/x"}, env="dev", project_name="project-a",
-    )
-
-    from jenkins_config.mcp.tools.build_tools import _record_triggered
-    _record_triggered([(job, 42)], hist_file, branch_field_for=lambda env: "BRANCH_NAME")
-
-    records = HistoryManager(hist_file).list(limit=10)
-    assert len(records) == 1
-    assert records[0].branch == "feat/x"
-
-
-def test_probe_build_numbers_survives_exception():
-    """验证单个探测异常不影响整批结果，对应位置返回 None"""
-    from jenkins_config.mcp.tools.build_tools import _probe_build_numbers
-
-    client = Mock()
-    client.get_build_number.side_effect = [Exception("boom"), 7]
-    queued = [(Mock(), "http://q/1/"), (Mock(), "http://q/2/")]
-
-    assert _probe_build_numbers(client, queued, 1) == [None, 7]

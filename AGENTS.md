@@ -55,14 +55,16 @@ jenkins-config/
 │   ├── paths.py                # Config/history path anchoring (shared by CLI + MCP)
 │   ├── filelock.py             # Cross-process file lock + atomic write
 │   ├── jenkins.py              # Jenkins API client
-│   ├── builder.py              # Build orchestration
+│   ├── build_flow.py           # Shared build flow (selection, blocking, queue)
 │   ├── history.py              # Build history persistence
 │   └── utils.py                # Logging utilities
 ├── tests/                      # Test suite
 │   ├── test_mcp/               # MCP tests (auto-skipped when mcp extra missing)
 │   ├── test_config.py
 │   ├── test_jenkins.py
-│   ├── test_builder.py
+│   ├── test_build_flow.py      # parse_params / select_jobs
+│   ├── test_build_flow_blocking.py  # run_blocking / select_rebuild_jobs
+│   ├── test_build_flow_queue.py     # trigger_queued / probe
 │   ├── test_history.py
 │   ├── test_paths.py           # search_bases_detail() / probe_report() ordering
 │   └── test_utils.py
@@ -97,10 +99,14 @@ jenkins_config/mcp/             # MCP Server (optional, requires "mcp" extra)
 cli.py (entry)
     ├── config.py (Config, Job, Environment)
     ├── jenkins.py (JenkinsClient, BuildStatus)
-    ├── builder.py (Builder, BuildResult)
+    ├── build_flow.py (Selection, run_blocking, trigger_queued)
     ├── history.py (HistoryManager, BuildRecord)
     └── utils.py (logging functions)
 ```
+
+`build_flow.py` is the single seam for job selection, parameter resolution and
+both trigger strategies. CLI and MCP are adapters: they own confirmation,
+write gates, log rendering and payload wording; the flow rules live here.
 
 ## CLI Commands
 

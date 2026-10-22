@@ -151,9 +151,9 @@ def test_all_tools_keep_stdout_clean(capsys, monkeypatch, tmp_path):
         raise ConnectionError("用例禁止真实外呼")
 
     # 诊断类 tool 会建客户端；替掉客户端构造即可切断网络，同时保留失败分支
-    monkeypatch.setattr(
-        "jenkins_config.mcp.utils.build_jenkins_client", _no_network
-    )
+    from jenkins_config.jenkins import JenkinsClient
+
+    monkeypatch.setattr(JenkinsClient, "from_config", _no_network)
 
     _register_tools()
     tools = asyncio.run(mcp.list_tools())

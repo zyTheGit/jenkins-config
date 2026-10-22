@@ -48,7 +48,7 @@ def test_health_check_success(mock_config):
         mock_client = Mock()
         mock_client.health_check.return_value = True
         mock_client.base_url = "http://jenkins:8080"
-        MockClient.return_value = mock_client
+        MockClient.from_config.return_value = mock_client
 
         from jenkins_config.mcp.tools.diagnose_tools import health_check
         result = health_check()
@@ -66,7 +66,7 @@ def test_health_check_connection_error(mock_config):
         mock_client = Mock()
         mock_client.health_check.side_effect = ConnectionError("无法连接到 Jenkins 服务器")
         mock_client.base_url = "http://jenkins:8080"
-        MockClient.return_value = mock_client
+        MockClient.from_config.return_value = mock_client
 
         from jenkins_config.mcp.tools.diagnose_tools import health_check
         result = health_check()
@@ -106,7 +106,7 @@ def test_get_build_status_success(mock_config):
 
         mock_client = Mock()
         mock_client.get_build_status.return_value = info
-        MockClient.return_value = mock_client
+        MockClient.from_config.return_value = mock_client
 
         from jenkins_config.mcp.tools.diagnose_tools import get_build_status
         result = get_build_status("project-a", 100)
@@ -132,7 +132,7 @@ def test_get_build_status_short_duration(mock_config):
 
         mock_client = Mock()
         mock_client.get_build_status.return_value = info
-        MockClient.return_value = mock_client
+        MockClient.from_config.return_value = mock_client
 
         from jenkins_config.mcp.tools.diagnose_tools import get_build_status
         result = get_build_status("project-a", 101)
@@ -149,7 +149,7 @@ def test_get_build_status_error(mock_config):
 
         mock_client = Mock()
         mock_client.get_build_status.side_effect = Exception("HTTP 404")
-        MockClient.return_value = mock_client
+        MockClient.from_config.return_value = mock_client
 
         from jenkins_config.mcp.tools.diagnose_tools import get_build_status
         result = get_build_status("project-a", 999)
@@ -172,7 +172,7 @@ def test_get_build_log_success(mock_config):
 
         mock_client = Mock()
         mock_client.get_build_log.return_value = "Started by user admin\nFinished: SUCCESS"
-        MockClient.return_value = mock_client
+        MockClient.from_config.return_value = mock_client
 
         from jenkins_config.mcp.tools.diagnose_tools import DEFAULT_LOG_TAIL_KB, get_build_log
         result = get_build_log("project-a", 100)
@@ -190,7 +190,7 @@ def test_get_build_log_full_when_tail_kb_non_positive(mock_config):
 
         mock_client = Mock()
         mock_client.get_build_log.return_value = "full log"
-        MockClient.return_value = mock_client
+        MockClient.from_config.return_value = mock_client
 
         from jenkins_config.mcp.tools.diagnose_tools import get_build_log
         get_build_log("project-a", 100, tail_kb=0)
@@ -205,7 +205,7 @@ def test_get_build_log_closes_client(mock_config):
 
         mock_client = Mock()
         mock_client.get_build_log.return_value = "log"
-        MockClient.return_value = mock_client
+        MockClient.from_config.return_value = mock_client
 
         from jenkins_config.mcp.tools.diagnose_tools import get_build_log
         get_build_log("project-a", 100)
@@ -220,7 +220,7 @@ def test_get_build_log_empty(mock_config):
 
         mock_client = Mock()
         mock_client.get_build_log.return_value = ""
-        MockClient.return_value = mock_client
+        MockClient.from_config.return_value = mock_client
 
         from jenkins_config.mcp.tools.diagnose_tools import get_build_log
         result = get_build_log("project-a", 100)
@@ -235,7 +235,7 @@ def test_get_build_log_error(mock_config):
 
         mock_client = Mock()
         mock_client.get_build_log.side_effect = Exception("Connection refused")
-        MockClient.return_value = mock_client
+        MockClient.from_config.return_value = mock_client
 
         from jenkins_config.mcp.tools.diagnose_tools import get_build_log
         result = get_build_log("project-a", 100)

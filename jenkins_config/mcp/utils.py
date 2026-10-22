@@ -65,7 +65,6 @@ __all__ = [
     "resolve_history_path",
     "history_manager",
     "get_config",
-    "build_jenkins_client",
     "jenkins_client",
     "write_allowed",
     "write_denied_message",
@@ -637,30 +636,6 @@ def get_config(config_path: str = "") -> Any:
     return Config.load(resolve_config_path(config_path))
 
 
-def build_jenkins_client(config: Any) -> Any:
-    """根据 Config 创建 JenkinsClient
-
-    超时统一取 config.build.curl_timeout，避免各调用点退回客户端默认值。
-
-    Args:
-        config: Config 实例
-
-    Returns:
-        JenkinsClient 实例
-
-    Example:
-        >>> client = build_jenkins_client(get_config())  # doctest: +SKIP
-    """
-    from jenkins_config.jenkins import JenkinsClient
-
-    return JenkinsClient(
-        url=config.server.url,
-        token=config.server.token,
-        username=config.server.username,
-        timeout=config.build.curl_timeout,
-    )
-
-
 @contextmanager
 def jenkins_client(config_path: str = "") -> Iterator[Any]:
     """以上下文管理方式获取 JenkinsClient，退出时关闭底层 Session
@@ -678,7 +653,9 @@ def jenkins_client(config_path: str = "") -> Iterator[Any]:
         >>> with jenkins_client() as client:  # doctest: +SKIP
         ...     client.health_check()
     """
-    client = build_jenkins_client(get_config(config_path))
+    from jenkins_config.jenkins import JenkinsClient
+
+    client = JenkinsClient.from_config(get_config(config_path))
     try:
         yield client
     finally:

@@ -11,12 +11,11 @@ from contextlib import closing
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from .build_flow import run_blocking, select_jobs, select_rebuild_jobs
 from .config import Config
-from .config_io import _parse_params_field
 from .jenkins import JenkinsClient, BuildStatus
-from .builder import Builder
 from .build_result import BuildResult
-from .history import HistoryManager, BuildRecord
+from .history import HistoryManager
 from .paths import resolve_history_path
 
 from .utils import (
@@ -52,7 +51,20 @@ def run_build(config_file: Path, args):
         sys.exit(1)
 
     jobs_filter = args.jobs.split(",") if args.jobs else None
-    jobs = config.get_jobs(env=args.env, jobs=jobs_filter)
+
+    try:
+        selection = select_jobs(
+            config,
+            env=args.env,
+            filters=jobs_filter,
+            branch=getattr(args, "branch", "") or "",
+            params_text=getattr(args, "params", "") or "",
+        )
+    except ValueError as e:
+        log_error(f"参数解析失败: {e}")
+        sys.exit(1)
+
+    jobs = selection.jobs
 
     if not jobs:
         log_error("没有找到匹配的项目")
@@ -65,8 +77,12 @@ def run_build(config_file: Path, args):
         for job in jobs:
             branch_field = config.branch_field_for(job.env)
             log_info(f"使用自定义分支: {custom_branch} (参数名: {branch_field})")
-            job.branch = custom_branch
-            job.params[branch_field] = custom_branch
+
+    if selection.skipped_params:
+        log_warn(
+            "以下参数无法作为 Jenkins 参数传递，已跳过: "
+            + ", ".join(selection.skipped_params)
+        )
 
 
     # 显示将要构建的项目
@@ -90,12 +106,6 @@ def run_build(config_file: Path, args):
             log_warn("已取消构建")
             sys.exit(130)
 
-    # 覆盖参数 -p
-    if getattr(args, "params", None):
-        override_params = _parse_params_field(args.params)
-        for job in jobs:
-            job.params.update(override_params)
-
     _execute_build(config, jobs, config_file, args)
 
 
@@ -118,19 +128,20 @@ def run_rebuild_last(config_file: Path, args):
     print(f"将要重建的项目 (共 {len(last_group)} 个):")
     print_sep("-")
 
-    jobs = []
-    for record in last_group:
-        job = config.create_job_from_record(record)
-        if job:
-            jobs.append(job)
-            print(f"  - [{record.env}] {record.job_key} #{record.build_num}")
-            if record.branch:
-                print(f"      分支: {record.branch}")
-        else:
-            log_warn(f"项目 '{record.project_name}' 在配置中不存在，跳过")
+    selection = select_rebuild_jobs(config, last_group)
+
+    for record, job in zip(selection.records, selection.jobs):
+        print(f"  - [{record.env}] {job.key} #{record.build_num}")
+        if record.branch:
+            print(f"      分支: {record.branch}")
+
+    for record in selection.missing:
+        log_warn(f"项目 '{record.project_name}' 在配置中不存在，跳过")
 
     print_sep("-")
     print()
+
+    jobs = selection.jobs
 
     if not jobs:
         log_error("没有可重建的项目")
@@ -170,14 +181,7 @@ def _execute_build(config, jobs, config_file, args):
     log_info(f"日志目录: {log_dir}")
 
     # 客户端持有 requests.Session，用 closing 确保构建结束后释放连接池
-    with closing(
-        JenkinsClient(
-            url=config.server.url,
-            username=config.server.username,
-            token=config.server.token,
-            timeout=config.build.curl_timeout,
-        )
-    ) as client:
+    with closing(JenkinsClient.from_config(config)) as client:
         # 构建前检查 Jenkins 连接
         try:
             client.health_check()
@@ -185,41 +189,23 @@ def _execute_build(config, jobs, config_file, args):
             log_error(str(e))
             sys.exit(1)
 
-        builder = Builder(client, config)
-
-        if args.mode == "parallel":
-            results = builder.build_parallel(jobs, str(log_dir))
-        else:
-            results = builder.build_sequential(jobs, str(log_dir))
-
-    # 批量保存历史记录
-    manager = HistoryManager(str(resolve_history_path(config_file)))
-
-    records = []
-    for result in results:
-        job = next((j for j in jobs if j.key == result.job_key), None)
-        records.append(
-            BuildRecord(
-                timestamp=datetime.now().isoformat(timespec="seconds"),
-                env=job.env if job else "",
-                job_key=result.job_key,
-                build_num=result.build_num,
-                status=result.status.value,
-                duration=result.duration,
-                log_file=result.log_file,
-                branch=result.branch,
-                params=result.params,
-                project_name=result.project_name,
-                job_path=job.path if job else "",
-            )
+        outcome = run_blocking(
+            client,
+            config,
+            jobs,
+            str(log_dir),
+            mode=args.mode,
+            history_file=str(resolve_history_path(config_file)),
         )
-    # 历史落盘失败（磁盘满、目录只读等）不应吞掉已完成的构建报告
-    try:
-        manager.add_batch(records)
-    except OSError as e:
-        log_warn(f"构建历史保存失败（{e}），本次构建结果仅输出报告")
 
-    generate_report(results, str(log_dir))
+    # 历史落盘失败（磁盘满、目录只读等）不应吞掉已完成的构建报告
+    if outcome.history_error:
+        log_warn(
+            f"构建历史保存失败（{outcome.history_error}），"
+            "本次构建结果仅输出报告"
+        )
+
+    generate_report(outcome.results, str(log_dir))
 
 
 def _cleanup_old_logs(log_dir: str, retention_days: int):
