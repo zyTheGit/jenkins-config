@@ -8,6 +8,8 @@ MCP Tools - 构建历史查询工具
 路径，HistoryManager(create=False) 读不到文件时又不抛异常——两者叠加的结果是
 "没配置"和"确实没构建过"都返回空列表 / 全 0 统计，调用方无法区分，模型会顺着
 "没有历史"这个错误前提继续推理。因此配置类失败必须在取数据前短路成失败载荷。
+短路规则本身不在本模块：由 errors.unusable_config_payload() 依据 inspect_config 的
+分层结论判定，本文件只负责调用与回填形状。
 
 反过来，配置正常而历史文件尚未生成是**合法状态**（还没触发过构建），
 必须保持空列表 / 全 0 统计的既有行为，不能被上面的短路误伤。
@@ -18,39 +20,9 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
-from jenkins_config.mcp.errors import CONFIG_UNUSABLE_CODES, failure_payload
+from jenkins_config.mcp.errors import config_failure_payload, unusable_config_payload
 from jenkins_config.mcp.server import mcp
-from jenkins_config.mcp.utils import config_failure_payload, history_manager, inspect_config
-
-
-def _config_gate(config_path: str, action: str) -> dict[str, Any] | None:
-    """在读取历史数据前拦截"配置不可用"的情形
-
-    只拦 CONFIG_UNUSABLE_CODES（文件不存在 / 越界 / 不可读 / 语法错误 /
-    家目录不可用）。config_incomplete 不拦：凭据没填不影响读本地历史文件。
-
-    错误码与路径直接取 inspect_config 的分层结论，不再重跑一次分类，
-    避免"探测说 A、载荷写 B"的漂移。
-
-    Args:
-        config_path: 调用方传入的配置文件路径，为空时按环境变量 / 自动探测
-        action: 人类可读的动作前缀，如 "查询历史记录失败"
-
-    Returns:
-        配置不可用时返回统一失败载荷；配置可用时返回 None
-
-    Example:
-        >>> _config_gate("", "查询历史记录失败")  # doctest: +SKIP
-        {'error_code': 'config_not_found', ...}
-    """
-    inspection = inspect_config(config_path)
-    if inspection.error_code in CONFIG_UNUSABLE_CODES:
-        return failure_payload(
-            inspection.error_code,
-            f"{action}: {inspection.error}",
-            inspection.config_path,
-        )
-    return None
+from jenkins_config.mcp.utils import history_manager, inspect_config
 
 
 def _get_history_manager(config_path: str = "") -> Any:
@@ -91,7 +63,7 @@ def show_history(env: str = "", limit: int = 20, config_path: str = "") -> list[
         [{'timestamp': '2026-03-20T10:00:00', 'env': 'dev', ...}]
     """
     # 先探测配置：配置不可用时下面读到的"空历史"是假象，必须短路（见模块 docstring）
-    gate = _config_gate(config_path, "查询历史记录失败")
+    gate = unusable_config_payload(inspect_config(config_path), "查询历史记录失败")
     if gate is not None:
         return [gate]
 
@@ -121,7 +93,7 @@ def show_history_stats(config_path: str = "") -> dict[str, Any]:
         {'total': 10, 'success': 8, 'failure': 2, 'building': 0, 'success_rate': '80.0%'}
     """
     # 与 show_history 同一理由：全 0 统计在配置缺失时是假象，不能当成"没构建过"
-    gate = _config_gate(config_path, "查询历史统计失败")
+    gate = unusable_config_payload(inspect_config(config_path), "查询历史统计失败")
     if gate is not None:
         return gate
 

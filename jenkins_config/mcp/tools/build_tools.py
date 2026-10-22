@@ -12,10 +12,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 from jenkins_config.build_flow import QueueOutcome, select_jobs, trigger_queued
-from jenkins_config.mcp.errors import ErrorCode, failure_payload
+from jenkins_config.mcp.errors import ErrorCode, config_failure_payload, failure_payload
 from jenkins_config.mcp.server import mcp
 from jenkins_config.mcp.utils import (
-    config_failure_payload,
     failure_result,
     get_config,
     history_manager,

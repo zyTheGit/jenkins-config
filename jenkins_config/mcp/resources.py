@@ -4,14 +4,16 @@ MCP Resources - 只读数据端点
 提供配置和构建历史的只读数据资源，
 MCP 客户端可通过 URI 模板访问这些数据。
 
-与同名 Tool 共用 utils 中的数据组装函数，并统一以 {"error": ...}
-形式返回异常，避免异常原样抛给 MCP 客户端。
+与同名 Tool 共用 utils 中的数据组装函数；异常一律经 mcp.errors 折算成
+统一失败载荷（error_code / error / config_path / next_steps / docs）再序列化，
+客户端读 tool 还是读 resource 都只面对一种失败形状。
 """
 
 from __future__ import annotations
 
 from typing import Any, Callable
 
+from jenkins_config.mcp.errors import config_failure_payload
 from jenkins_config.mcp.server import mcp
 from jenkins_config.mcp.utils import (
     dump_json,
@@ -24,14 +26,17 @@ from jenkins_config.mcp.utils import (
 
 
 def _safe_dump(loader: Callable[[], Any], action: str) -> str:
-    """执行数据加载并序列化，异常时返回统一的错误 JSON
+    """执行数据加载并序列化，异常时回统一失败载荷的 JSON
+
+    不再是 {"error": "..."} 两键形状：Resource URI 模板装不下 config_path，
+    因此把 config_path 留空交给 errors 自行探测，但失败字段集合与 Tool 完全一致。
 
     Args:
         loader: 无参的数据加载函数
         action: 动作描述，用于拼接错误信息
 
     Returns:
-        JSON 字符串，失败时为 {"error": "..."}
+        JSON 字符串，失败时为五字段失败载荷
 
     Example:
         >>> _safe_dump(lambda: {"ok": True}, "测试")
@@ -40,7 +45,7 @@ def _safe_dump(loader: Callable[[], Any], action: str) -> str:
     try:
         return dump_json(loader())
     except Exception as e:
-        return dump_json({"error": f"{action}失败: {e}"})
+        return dump_json(config_failure_payload("", e, action))
 
 
 @mcp.resource("config://environments")
@@ -54,7 +59,7 @@ def get_environments_resource() -> str:
         >>> get_environments_resource()  # doctest: +SKIP
         '[\\n  {\\n    "name": "dev",\\n    "description": "开发环境"\\n  }\\n]'
     """
-    return _safe_dump(lambda: environments_payload(get_config()), "读取环境列表")
+    return _safe_dump(lambda: environments_payload(get_config()), "读取环境列表失败")
 
 
 @mcp.resource("config://projects/{env}")
@@ -71,7 +76,7 @@ def get_projects_resource(env: str) -> str:
         >>> get_projects_resource("dev")  # doctest: +SKIP
         '[\\n  {\\n    "environment": "dev", ...\\n]'
     """
-    return _safe_dump(lambda: projects_payload(get_config(), env), "读取项目列表")
+    return _safe_dump(lambda: projects_payload(get_config(), env), "读取项目列表失败")
 
 
 def _recent_builds_payload() -> Any:
@@ -150,7 +155,7 @@ def get_recent_builds_resource() -> str:
         >>> get_recent_builds_resource()  # doctest: +SKIP
         '[\\n  {\\n    "timestamp": "2026-03-20T10:00:00", ...\\n]'
     """
-    return _safe_dump(_recent_builds_payload, "读取构建历史")
+    return _safe_dump(_recent_builds_payload, "读取构建历史失败")
 
 
 @mcp.resource("history://stats")
@@ -168,4 +173,4 @@ def get_stats_resource() -> str:
         >>> get_stats_resource()  # doctest: +SKIP
         '{\\n  "total": 10, ...\\n}'
     """
-    return _safe_dump(_stats_payload, "读取构建统计")
+    return _safe_dump(_stats_payload, "读取构建统计失败")

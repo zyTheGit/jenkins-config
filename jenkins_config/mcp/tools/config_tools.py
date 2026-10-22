@@ -15,11 +15,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from jenkins_config.mcp.errors import ErrorCode, failure_payload
+from jenkins_config.mcp.errors import ErrorCode, config_failure_payload, failure_payload
 from jenkins_config.mcp.server import mcp
 from jenkins_config.mcp.utils import (
     backup_config_file,
-    config_failure_payload,
     environments_payload,
     get_config,
     projects_payload,

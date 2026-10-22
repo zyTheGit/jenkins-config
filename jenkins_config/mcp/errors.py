@@ -1,20 +1,31 @@
 """
-MCP 统一失败载荷 - 错误码、可执行的下一步建议、异常分类
+MCP 统一失败载荷 - 错误码、可执行的下一步建议、端到端的载荷构造
 
-所有 tool 的失败返回都从这里取字段，目的只有一个：让调用方（AI 客户端）
+所有 tool / resource 的失败返回都从本模块取字段，目的只有一个：让调用方（AI 客户端）
 不必读中文错误文案就能决定下一步做什么。因此 error_code 是**闭集**，
 next_steps 每条都必须是可执行动作（调某个 tool / 设某个环境变量 / 改某个文件），
 而不是"请检查配置"这类无从下手的描述。
 
-本模块刻意不导入 jenkins_config.mcp.utils：utils 需要在 inspect_config 里
-引用这里的错误码，两边互相导入会成环。依赖方向固定为 utils → errors。
+分类与构造也全部收在这里，调用方只交回"手头的东西"，不再自行拼载荷：
+- 已有错误码 → failure_payload()
+- 只有异常（tool 的 except 分支）→ config_failure_payload()
+- 已有分层探测结论 → unusable_config_payload()
+判定规则（哪些码算"配置本身不可用"、异常怎么折算成码）与载荷构造放在同一处，
+才不会出现"探测说 A、载荷写 B"或某处漏拦一个码这类分叉。
+
+模块级依赖方向固定为 utils → errors（utils 的 inspect_config 要引用这里的错误码）。
+errors 里唯一需要反向调用的是路径解析，因此 config_failure_payload 在**函数内**惰性
+导入 resolve_config_path：加载期仍然不成环，运行时两个模块都已就位。
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from jenkins_config.config_io import VALIDATION_ERROR_PREFIX
+
+if TYPE_CHECKING:
+    from jenkins_config.mcp.utils import ConfigInspection
 
 # 排障文档位置（随失败载荷回传，便于客户端把用户引到完整说明）
 DOCS_REF = "docs/mcp/README.md"
@@ -50,6 +61,9 @@ class ErrorCode:
 #
 # config_incomplete 刻意不在其中：凭据没填只影响访问 Jenkins，
 # 读本地历史文件这类操作照样成立。
+#
+# 这份子集只由 is_config_unusable() 与 unusable_config_payload() 消费：
+# 判定不散落到各 tool，才能一处改动、处处生效。
 CONFIG_UNUSABLE_CODES = frozenset({
     ErrorCode.CONFIG_NOT_FOUND,
     ErrorCode.CONFIG_PARSE_ERROR,
@@ -141,6 +155,47 @@ def failure_payload(
     }
 
 
+def failure_text(action: str, reason: BaseException | str) -> str:
+    """拼接"动作: 原因"形式的失败文案
+
+    action 为空时直接回原因，而不是留下 ": 原因" 这种开头带悬空冒号的文案。
+    收在这里而不是各 tool 自行 f-string：失败文案的形状只有一种。
+
+    Args:
+        action: 人类可读的动作前缀，如 "加载配置失败"
+        reason: 异常对象或已成型的原因文本
+
+    Returns:
+        "动作: 原因"；action 为空时为原因本身
+
+    Example:
+        >>> failure_text("加载配置失败", "语法错误")
+        '加载配置失败: 语法错误'
+        >>> failure_text("", "语法错误")
+        '语法错误'
+    """
+    text = str(reason)
+    return f"{action}: {text}" if action else text
+
+
+def is_config_unusable(payload: dict[str, Any]) -> bool:
+    """判断失败载荷是否属于"配置本身不可用"
+
+    Args:
+        payload: failure_payload() 的返回体，允许缺键
+
+    Returns:
+        error_code 命中 CONFIG_UNUSABLE_CODES 时 True
+
+    Example:
+        >>> is_config_unusable(failure_payload(ErrorCode.CONFIG_NOT_FOUND, "x"))
+        True
+        >>> is_config_unusable(failure_payload(ErrorCode.CONFIG_INCOMPLETE, "x"))
+        False
+    """
+    return payload.get("error_code") in CONFIG_UNUSABLE_CODES
+
+
 def classify(exc: BaseException, phase: str) -> str:
     """把异常按发生阶段折算为错误码
 
@@ -188,3 +243,73 @@ def classify(exc: BaseException, phase: str) -> str:
     if isinstance(exc, OSError):
         return ErrorCode.CONFIG_PERMISSION_DENIED
     return ErrorCode.UNKNOWN
+
+
+def config_failure_payload(
+    config_path: str = "", exc: BaseException | None = None, action: str = ""
+) -> dict[str, Any]:
+    """把配置相关的异常折算为统一失败载荷
+
+    tool 的 except 分支通常只拿得到一个异常对象，因此这里负责把"异常 + 手头
+    的 config_path"补全成完整载荷：先重跑一次路径解析来定阶段——白名单越界与
+    文件权限失败都抛 PermissionError，靠异常类型分不出来。重跑只做寻址、不读
+    文件内容，代价可忽略，换来错误码的确定性。
+
+    Args:
+        config_path: 调用方传入的配置文件路径，为空时按环境变量 / 自动探测
+        exc: 捕获到的异常，为 None 时按 UNKNOWN 处理
+        action: 人类可读的动作前缀，如 "加载配置失败"
+
+    Returns:
+        failure_payload() 的五字段字典
+
+    Example:
+        >>> config_failure_payload(exc=FileNotFoundError("x"))["error_code"]
+        'config_not_found'
+    """
+    from jenkins_config.mcp.utils import resolve_config_path
+
+    try:
+        resolved = resolve_config_path(config_path)
+    except (PermissionError, RuntimeError) as denied:
+        # 寻址阶段就失败：路径本身是问题所在，config_path 留空而不是回一个
+        # 没通过校验的越界路径
+        return failure_payload(classify(denied, "resolve"), failure_text(action, denied))
+
+    if exc is None:
+        return failure_payload(ErrorCode.UNKNOWN, action or "未知错误", resolved)
+    return failure_payload(classify(exc, "read"), failure_text(action, exc), resolved)
+
+
+def unusable_config_payload(
+    inspection: ConfigInspection, action: str
+) -> dict[str, Any] | None:
+    """按分层探测结论决定是否短路为失败载荷
+
+    短路规则归本模块而不是归调用方：CONFIG_UNUSABLE_CODES 的含义就是"读数据之前
+    必须先修配置"，把子集和判定放在一起，才不会出现在某处忘拦 config_parse_error、
+    另一处又误拦 config_incomplete 的分叉。凭据没填（config_incomplete）不拦，
+    读本地历史的 tool 照样返回空结果。
+
+    错误码与路径直接取 inspection 的分层结论，不再重跑一次分类，避免同一份配置
+    被探测两次、两次的说法还不一样。
+
+    Args:
+        inspection: utils.inspect_config() 的返回体
+        action: 人类可读的动作前缀，如 "查询历史记录失败"
+
+    Returns:
+        配置不可用时返回统一失败载荷；可用时返回 None
+
+    Example:
+        >>> from jenkins_config.mcp.utils import inspect_config  # doctest: +SKIP
+        >>> unusable_config_payload(inspect_config("/nope/jenkins-config.yaml"), "查询失败")  # doctest: +SKIP
+        {'error_code': 'config_not_found', ...}
+    """
+    if inspection.error_code not in CONFIG_UNUSABLE_CODES:
+        return None
+    return failure_payload(
+        inspection.error_code,
+        failure_text(action, inspection.error),
+        inspection.config_path,
+    )

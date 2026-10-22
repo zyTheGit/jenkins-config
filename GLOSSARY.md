@@ -29,3 +29,17 @@
 构建历史中的一条持久化记录（`BuildRecord`），包含时间戳、环境、Job 标识、
 构建编号、状态、分支、参数与日志路径。同一次构建请求写入的记录共享时间戳，
 `get_last_build_group` 以此分组。
+
+## Failure payload
+
+MCP 侧一切失败的统一返回体：`error_code` / `error` / `config_path` / `next_steps` / `docs`
+五个字段。错误码是闭集，分类维度是"用户下一步该做什么"；`next_steps` 恒不为空且每条
+都是可直接执行的动作。分类与构造都由 `jenkins_config/mcp/errors.py` 承担，Tool 与
+Resource 共用同一形状。
+
+## Unusable config（配置不可用）
+
+`CONFIG_UNUSABLE_CODES` 这一组错误码（文件不存在、语法坏、路径越界、无读权限、家目录
+不可用）表示"配置本身立不起来"，任何依赖配置的读操作都必须在此之前短路。
+`config_incomplete`（凭据仍是占位符）**不属于**这一组：它只影响访问 Jenkins，
+读本地构建历史照样成立。

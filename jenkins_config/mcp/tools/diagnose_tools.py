@@ -8,9 +8,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from jenkins_config.mcp.errors import CONFIG_UNUSABLE_CODES, ErrorCode, failure_payload
+from jenkins_config.mcp.errors import (
+    ErrorCode,
+    config_failure_payload,
+    failure_payload,
+    is_config_unusable,
+)
 from jenkins_config.mcp.server import mcp
-from jenkins_config.mcp.utils import config_failure_payload, jenkins_client
+from jenkins_config.mcp.utils import jenkins_client
 from jenkins_config.utils import format_duration_short
 
 # 构建日志默认返回的尾部大小（KB），避免超大日志占满内存与模型上下文
@@ -52,7 +57,7 @@ def _log_failure_text(reason: str, payload: dict[str, Any] | None = None) -> str
         True
     """
     lines = [reason]
-    if payload is not None and payload["error_code"] in CONFIG_UNUSABLE_CODES:
+    if payload is not None and is_config_unusable(payload):
         lines.append(
             f"error_code={payload['error_code']}，config_path={payload['config_path']}"
         )

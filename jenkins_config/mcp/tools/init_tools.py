@@ -416,7 +416,7 @@ def init_config(
         # 锁等待超时是并发占用，不是权限问题：给出"补写权限"这类动作只会把
         # 调用方引向一条修不好的路
         return _failure(
-            ErrorCode.UNKNOWN_ERROR,
+            ErrorCode.UNKNOWN,
             f"等待配置文件锁超时，未做任何改动: {exc}",
             resolved,
             [

@@ -6,6 +6,7 @@ init_config（零配置初始化）测试
 - 分级门控：不存在即创建（免门控）、已存在拒绝覆盖、overwrite 需门控
 - 目标枚举与格式校验一律回结构化载荷
 - 家目录不可用、CWD 过宽这两条"必须给出路"的失败分支
+- 文件锁超时同样回结构化载荷（该分支一度写错 ErrorCode 属性名，只会抛裸异常）
 - 生成文件的凭据字段恒为占位符
 - T-18 端到端：init_config → 填真实值 → list_environments 成功
 
@@ -14,11 +15,14 @@ init_config（零配置初始化）测试
 """
 
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 import yaml
 
 from jenkins_config.config_io import PLACEHOLDER_VALUES
+from jenkins_config.mcp.errors import ErrorCode
+from jenkins_config.mcp.tools import init_tools
 from jenkins_config.mcp.tools.init_tools import DEFAULT_CONFIG_FILE_NAME, init_config
 from jenkins_config.mcp.utils import CONFIG_ROOTS_ENV_VAR, WRITE_ENV_VAR
 from jenkins_config.paths import APP_DIR_NAME, CONFIG_ENV_VAR
@@ -202,6 +206,28 @@ def test_invalid_format_returns_structured_payload(fake_home):
     assert result["created"] is False
     assert result["error_code"]
     assert result["next_steps"]
+    assert not _user_config_file(fake_home).exists()
+
+
+def test_lock_timeout_returns_payload(fake_home, monkeypatch):
+    """等待文件锁超时回 unknown_error 载荷，而不是抛 AttributeError
+
+    这条分支一度写成 ErrorCode.UNKNOWN_ERROR（该属性不存在）：并发占用是这里
+    最容易走到的失败之一，而载荷只在真正拿不到锁时才组装，于是"报什么错"这件事
+    本身把 tool 打崩，客户端只收到一个裸异常。
+    """
+    monkeypatch.setattr(
+        init_tools,
+        "_write_template",
+        Mock(side_effect=TimeoutError("等待配置文件锁超时 10 秒")),
+    )
+
+    result = init_config(target="user")
+
+    assert result["created"] is False
+    assert result["error_code"] == ErrorCode.UNKNOWN
+    assert "等待配置文件锁超时" in result["error"]
+    assert any("重新调用 init_config" in step for step in result["next_steps"])
     assert not _user_config_file(fake_home).exists()
 
 

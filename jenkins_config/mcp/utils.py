@@ -1,8 +1,11 @@
 """
 MCP Tools 共享工具函数
 
-提供配置加载、路径解析、客户端创建、错误返回等公共功能，
+提供配置加载、路径解析、客户端创建、数据组装等公共功能，
 供各 MCP Tool / Resource 函数复用，避免重复代码。
+
+失败载荷的构造不在这里：分类与组装统一由 jenkins_config.mcp.errors 提供，
+本模块只负责把探测结论（ConfigInspection）算清楚。
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from jenkins_config.config_io import PLACEHOLDER_VALUES
-from jenkins_config.mcp.errors import ErrorCode, classify, failure_payload
+from jenkins_config.mcp.errors import ErrorCode, classify
 from jenkins_config.paths import (
     APP_DIR_NAME,
     CONFIG_ENV_VAR,
@@ -61,7 +64,6 @@ __all__ = [
     "backup_config_file",
     "ConfigInspection",
     "inspect_config",
-    "config_failure_payload",
     "resolve_history_path",
     "history_manager",
     "get_config",
@@ -535,43 +537,6 @@ def inspect_config(config_path: str = "") -> ConfigInspection:
         config_path=resolved, source=source, exists=True, readable=True,
         parse_ok=True, complete=True, path_allowed=True, config=config,
     )
-
-
-def config_failure_payload(
-    config_path: str = "", exc: BaseException | None = None, action: str = ""
-) -> dict[str, Any]:
-    """把配置相关的异常折算为统一失败载荷
-
-    先重跑一次路径解析来确定 phase：白名单越界与文件权限失败都抛 PermissionError，
-    而 tool 内部只拿得到一个异常对象，靠类型分不出来。重跑只做存在性判断、
-    不读文件内容，代价可忽略，换来错误码的确定性。
-
-    Args:
-        config_path: 调用方传入的配置文件路径，为空时按环境变量 / 自动探测
-        exc: 捕获到的异常，为 None 时按 UNKNOWN 处理
-        action: 人类可读的动作前缀，如 "加载配置失败"
-
-    Returns:
-        failure_payload() 的五字段字典
-
-    Example:
-        >>> config_failure_payload(exc=FileNotFoundError("x"))["error_code"]
-        'config_not_found'
-    """
-    def _describe(reason: BaseException) -> str:
-        """拼接 "动作: 原因" 形式的文案"""
-        return f"{action}: {reason}" if action else str(reason)
-
-    try:
-        resolved = resolve_config_path(config_path)
-    except PermissionError as denied:
-        return failure_payload(ErrorCode.CONFIG_PATH_DENIED, _describe(denied))
-    except RuntimeError as no_home:
-        return failure_payload(ErrorCode.HOME_UNAVAILABLE, _describe(no_home))
-
-    if exc is None:
-        return failure_payload(ErrorCode.UNKNOWN, action or "未知错误", resolved)
-    return failure_payload(classify(exc, "read"), _describe(exc), resolved)
 
 
 def resolve_history_path(config_path: str = "") -> Path:

@@ -864,22 +864,29 @@ stdout 是 JSON-RPC 通道，**日志一律走 stderr**，客户端会自行落�
 - `next_steps` — 可执行动作列表，**恒不为空**（未显式指定时按错误码取默认动作）。每条都是"调某个 tool / 设某个环境变量 / 改某个文件"，不写"请检查配置"这类无从下手的描述
 - `docs` — 文档位置，固定为 `docs/mcp/README.md`
 
-载荷放在哪里按返回类型分（见 §4 开头）：dict 型合并到顶层，list 型返回单元素纯错误载荷，`trigger_build` / `rebuild_last` 保持容器结构、四字段追加在顶层。
+载荷放在哪里按返回类型分（见 §4 开头）：dict 型合并到顶层，list 型返回单元素纯错误载荷，`trigger_build` / `rebuild_last` 保持容器结构、四字段追加在顶层，**4 个 Resource 也回同一组字段**（Resource 的 URI 模板装不下 `config_path`，因此其失败载荷里的路径由服务端自行寻址得出，客户端读 tool 和读 resource 只面对一种失败形状）。
 
 错误码枚举、来源异常与 `next_steps` 方向：
 
 - `config_not_found` — 来源 `FileNotFoundError`（探测链上没有配置文件，或显式路径不存在）。方向：调 `where_config` 看候选顺序 → 调 `init_config` 生成模板 → 或设 `JENKINS_MCP_CONFIG` 绝对路径
 - `config_parse_error` — 来源 `yaml.YAMLError`、非校验类 `ValueError`（YAML/JSON 语法坏、顶层不是字典）。方向：调 `where_config` 确认在读哪个文件 → 逐行查语法 → 调 `doctor` 复查
 - `config_path_denied` — 来源 `resolve` 阶段的 `PermissionError`（路径落在白名单之外）。方向：改用 `allowed_config_bases` 之内的路径 → 或把该目录追加到 `JENKINS_MCP_CONFIG_ROOTS`
-- `config_permission_denied` — 来源 `read` 阶段的 `OSError`（含 Windows 对目录抛的 `PermissionError` 与 Linux 的 `IsADirectoryError`，以及 `init_config` 写入失败 / 锁超时）。方向：确认是文件而非目录 → 补齐读（写）权限后调 `doctor` 复查
+- `config_permission_denied` — 来源 `read` 阶段的 `OSError`（含 Windows 对目录抛的 `PermissionError` 与 Linux 的 `IsADirectoryError`，以及 `init_config` 写入失败）。方向：确认是文件而非目录 → 补齐读（写）权限后调 `doctor` 复查
 - `config_incomplete` — 来源以 `配置错误: ` 开头的 `ValueError`、项目缺 `name` 的 `KeyError`，以及占位符未替换。方向：把 `server.url` / `server.token` 改为真实取值 → 调 `doctor` 确认 `config_complete` 变 ok
 - `home_unavailable` — 来源 `RuntimeError`（HOME / USERPROFILE 均缺失，`Path.home()` 失败）。方向：设置 HOME（Windows 为 USERPROFILE）→ 或用 `JENKINS_MCP_CONFIG` 绕开用户级目录（`init_config` 另给出 `target='cwd'`）
 - `config_exists` — `init_config` 目标已存在且 `overwrite=false`（未做任何改动），或目标虽不存在但生成后会顶掉另一份已生效的配置（`error` 里给出被遮蔽的路径）。方向：调 `where_config` 看现有配置 → 直接编辑它 → 确需覆盖 / 改用新位置时传 `overwrite=true` 并先开写门控
 - `write_not_allowed` — 未设 `JENKINS_MCP_ALLOW_WRITE`（`trigger_build` / `rebuild_last` / `save_config`，以及 `init_config` 的覆盖分支）。方向：在客户端 `env` 中设 `JENKINS_MCP_ALLOW_WRITE=1` → 重启 Server 后重试
 - `invalid_target` — 入参取值不合法：环境名为空、环境下无匹配项目、`params` 解析失败、`jenkins_url` 不在主机白名单、历史无可重建记录、`save_config` 非 YAML 路径、`init_config` 的 `target` / `format` 非法。方向：先用 `list_environments` / `list_projects` / `show_history` 确认可用取值，再用确认后的取值重调
-- `unknown_error` — 兜底码，给不属于上面任何一类的失败（历史文件损坏、Jenkins 网络异常等）。方向：调 `doctor` 拿完整体检 → 看 stderr 日志（可设 `JENKINS_MCP_LOG_LEVEL=DEBUG`）
+- `unknown_error` — 兜底码，给不属于上面任何一类的失败（历史文件损坏、Jenkins 网络异常、`init_config` 等待配置文件锁超时——并发占用而非权限问题）。方向：调 `doctor` 拿完整体检 → 看 stderr 日志（可设 `JENKINS_MCP_LOG_LEVEL=DEBUG`）
 
 分类维度是"**用户下一步该做什么**"，不是"底层抛了什么异常"：`config_path_denied` 与 `config_permission_denied` 的底层异常同为 `PermissionError`，但前者要改 `JENKINS_MCP_CONFIG_ROOTS`、后者要改文件权限，因此判别依据是异常发生的阶段（`resolve` / `read` / `parse` / `validate`）而非异常类型。Jenkins 连接失败也刻意不套用这套分类（`requests` 的连接异常是 `OSError` 子类，会被误归成"补齐文件读权限"），而是单独给网络方向的 `next_steps`。
+
+载荷的**构造**也全部在 `errors.py` 里完成，tool / resource 只交回手头的材料，不自己拼这五个字段：
+
+- 已知错误码 → `failure_payload(code, error, config_path, next_steps)`
+- 只有一个异常（tool 的 `except` 分支）→ `config_failure_payload(config_path, exc, action)`：先只重跑一次**寻址**来定阶段，寻址本身就失败时 `config_path` 留空（把一个没通过白名单的路径写成"当前生效配置"会让载荷与白名单互相矛盾）
+- 已有分层探测结论 → `unusable_config_payload(inspect_config(...), action)`：命中 `CONFIG_UNUSABLE_CODES` 才短路成载荷，否则返回 `None`。`show_history` / `show_history_stats` 靠它在取数据前拦截"没配置"，避免把"配置不可用"读成"确实没有历史"；`config_incomplete` 刻意不在这个子集里，所以凭据没填时读本地历史照常返回空结果
+- `is_config_unusable(payload)` 是这份子集唯一的读取口，`failure_text(action, reason)` 是唯一的文案拼接口
 
 
 
@@ -892,8 +899,9 @@ MCP 相关测试位于 `tests/test_mcp/` 目录，覆盖：
 
 - `test_server.py` — FastMCP 实例（惰性单例）、`_register_tools()` 注册全部 14 个工具、`current_log_sinks()`、`main()` 入口行为
 - `test_config_tools.py` / `test_build_tools.py` / `test_history_tools.py` / `test_diagnose_tools.py` — 各工具模块的参数解析、返回结构与异常处理（含统一失败载荷的形状）
-- `test_where_tools.py` / `test_doctor_tools.py` / `test_init_tools.py` — `where_config` 的来源判定与候选明细、`doctor` 的 11 项检查与判级、`init_config` 的分级写门控
-- `test_errors.py` — 错误码闭集、`failure_payload()` 的字段完整性、`classify()` 的阶段判别
+- `test_where_tools.py` / `test_doctor_tools.py` / `test_init_tools.py` — `where_config` 的来源判定与候选明细、`doctor` 的 11 项检查与判级、`init_config` 的分级写门控（含等待文件锁超时这条少见的分支回的是结构化载荷而非裸异常）
+- `test_resources.py` — 4 个 Resource 的成功路径与失败形状（失败必须与 tool 同一组字段，且"没有历史文件"仍属合法状态而非失败）
+- `test_errors.py` — 错误码闭集、`failure_payload()` 的字段完整性、`classify()` 的阶段判别、`config_failure_payload()` / `unusable_config_payload()` 的构造结果，以及一条扫描 `ErrorCode.*` 引用的防拼写用例
 
 配置锚定本身的测试在 `tests/test_paths.py`（`search_bases_detail()` / `probe_report()` 的顺序与跳过原因）。
 
