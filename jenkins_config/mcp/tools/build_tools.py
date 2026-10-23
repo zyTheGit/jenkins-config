@@ -18,8 +18,8 @@ from jenkins_config.mcp.utils import (
     failure_result,
     get_config,
     history_manager,
+    history_path_for,
     host_allowed,
-    resolve_history_path,
     write_allowed,
     write_denied_message,
 )
@@ -201,7 +201,7 @@ def trigger_build(
         result = _trigger_jobs(
             config,
             jobs,
-            str(resolve_history_path(config_path)),
+            str(history_path_for(config_path)),
             wait_build_num,
         )
         if selection.skipped_params:
@@ -358,7 +358,7 @@ def rebuild_last(
                     ),
                 )
 
-            hist_file = history_file or str(resolve_history_path(config_path))
+            hist_file = history_file or str(history_path_for(config_path))
             if not Path(hist_file).exists():
                 message = f"历史文件不存在: {hist_file}"
                 return failure_result(
@@ -432,7 +432,7 @@ def rebuild_last(
 
         # 配置文件模式
         config = get_config(config_path)
-        history_file_path = str(resolve_history_path(config_path))
+        history_file_path = str(history_path_for(config_path))
         manager = history_manager(history_file=history_file_path)
 
         last_group = manager.get_last_build_group()

@@ -23,9 +23,9 @@ from jenkins_config.mcp.utils import (
     CONFIG_ROOTS_ENV_VAR,
     WRITE_ENV_VAR,
     ConfigInspection,
+    history_path_for,
     inspect_config,
     jenkins_client,
-    resolve_history_path,
     write_allowed,
 )
 from jenkins_config.paths import runtime_mode
@@ -260,7 +260,7 @@ def _history_check(config_path: str) -> dict[str, Any]:
         'history_path'
     """
     try:
-        history = resolve_history_path(config_path)
+        history = history_path_for(config_path)
     except Exception as exc:
         return _check(
             "history_path", "warn", f"历史文件路径无法解析: {exc}",

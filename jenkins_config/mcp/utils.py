@@ -28,9 +28,9 @@ from jenkins_config.paths import (
     env_config_file,
     probe_report,
     resolve_config_file,
+    resolve_history_path as _resolve_history_path,
     search_bases,
     user_config_dir,
-    resolve_history_path as _resolve_history_path,
 )
 
 
@@ -64,7 +64,7 @@ __all__ = [
     "backup_config_file",
     "ConfigInspection",
     "inspect_config",
-    "resolve_history_path",
+    "history_path_for",
     "history_manager",
     "get_config",
     "jenkins_client",
@@ -539,21 +539,29 @@ def inspect_config(config_path: str = "") -> ConfigInspection:
     )
 
 
-def resolve_history_path(config_path: str = "") -> Path:
-    """解析构建历史文件路径
+def history_path_for(config_path: str = "") -> Path:
+    """把调用方传入的 config_path 折算成历史文件路径
 
-    默认锚定到配置文件所在目录的 data/build_history.json；
-    配置来自用户级配置目录时改锚到用户级数据目录（npx / EXE 部署场景），
-    实现委托给 jenkins_config.paths.resolve_history_path。
+    历史文件的锚定规则只有一条，写在 paths.resolve_history_path()：
+    `<配置文件所在目录>/data/build_history.json`。这里只补 MCP 侧缺的前一步——
+    先 resolve_config_path() 做寻址（应用 JENKINS_MCP_CONFIG、白名单校验），
+    再把结果交给那条规则。两步合成一个入口，各 tool 不必各自重复这两步；
+    改名而不叫 resolve_history_path 是为了让"入参是未经校验的调用方参数"这件事
+    写在名字上：同名的两套契约正是走错一步的地方。锚定函数在本模块以
+    _resolve_history_path 导入，utils 不再对外提供同名属性，
+    以免 "from mcp.utils import resolve_history_path" 拿到一套绕过白名单的语义。
 
     Args:
-        config_path: 配置文件路径，为空时自动检测
+        config_path: 调用方传入的配置文件路径参数，为空时按环境变量 / 自动探测
 
     Returns:
         历史文件的 Path 对象
 
+    Raises:
+        PermissionError: config_path 解析结果不在允许的根目录内
+
     Example:
-        >>> resolve_history_path()  # doctest: +SKIP
+        >>> history_path_for("/path/to/jenkins-config.yaml")  # doctest: +SKIP
         PosixPath('/path/to/data/build_history.json')
     """
     return _resolve_history_path(resolve_config_path(config_path))
@@ -578,7 +586,7 @@ def history_manager(config_path: str = "", history_file: str = "") -> Any:
     """
     from jenkins_config.history import HistoryManager
 
-    path = history_file or str(resolve_history_path(config_path))
+    path = history_file or str(history_path_for(config_path))
     return HistoryManager(path, create=False)
 
 

@@ -7,6 +7,8 @@
 - .jenkins-config 子目录候选排在对应目录之前
 - HOME 缺失时用户级候选降级为 skipped_reason='home_unavailable'
 - search_bases 改为基于明细实现后行为不变（源码 / 冻结两种模式）
+- config_candidates 的"目录顺序 × 后缀顺序"与 config_rank 的同源判定
+- config_rank 对非候选路径 / 未规范化路径的处理
 - probe_report 的 explicit_arg / probed / fallback 三态与 matched_file、history_path
 
 不依赖 mcp extra：paths 模块本身对 mcp 无依赖，因此放在 tests/ 根目录。
@@ -296,3 +298,71 @@ def test_probe_report_relative_arg_anchors_to_base(tmp_path, monkeypatch):
     assert report["source"] == "explicit_arg"
     assert report["config_path"] == str(expected)
     assert report["exists"] is True
+
+
+# ============================================================================
+# config_candidates / config_rank 测试（优先级顺序的唯一来源）
+# ============================================================================
+
+
+def test_config_candidates_orders_base_then_suffix(tmp_path, monkeypatch):
+    """验证候选顺序 = search_bases 的目录顺序 × CONFIG_FILE_NAMES 的后缀顺序"""
+    root, cwd, user_dir = _isolate_bases(tmp_path, monkeypatch)
+
+    candidates = paths.config_candidates()
+
+    assert candidates == [
+        base / name
+        for base in [
+            root / paths.APP_DIR_NAME,
+            root,
+            cwd / paths.APP_DIR_NAME,
+            cwd,
+            user_dir,
+        ]
+        for name in paths.CONFIG_FILE_NAMES
+    ]
+    assert len(candidates) == len(paths.search_bases()) * len(paths.CONFIG_FILE_NAMES)
+
+
+def test_config_rank_agrees_with_probe_hit(tmp_path, monkeypatch):
+    """验证"探测挑中谁"与"判定谁压过谁"同源：命中那份的序号必小于被压过的那份"""
+    root, cwd, _ = _isolate_bases(tmp_path, monkeypatch)
+    nested = root / paths.APP_DIR_NAME / "jenkins-config.yml"
+    nested.parent.mkdir(parents=True)
+    nested.write_text("server: {}", encoding="utf-8")
+    flat = cwd / "jenkins-config.yaml"
+    flat.write_text("server: {}", encoding="utf-8")
+
+    assert paths.resolve_config_file() == nested
+    assert paths.config_rank(nested) < paths.config_rank(flat)
+
+
+def test_config_rank_orders_suffix_within_same_dir(tmp_path, monkeypatch):
+    """验证同一目录内按 CONFIG_FILE_NAMES 排序（yaml > yml > json）"""
+    root, _, _ = _isolate_bases(tmp_path, monkeypatch)
+    yaml_file = root / "jenkins-config.yaml"
+    yml_file = root / "jenkins-config.yml"
+    json_file = root / "jenkins-config.json"
+
+    assert paths.config_rank(yaml_file) < paths.config_rank(yml_file)
+    assert paths.config_rank(yml_file) < paths.config_rank(json_file)
+
+
+def test_config_rank_puts_non_candidate_last(tmp_path, monkeypatch):
+    """验证自定义文件名排在候选序列之外，序号为候选总数（任何候选都压过它）"""
+    root, _, _ = _isolate_bases(tmp_path, monkeypatch)
+    custom = root / "my-config.yaml"
+
+    assert paths.config_rank(custom) == len(paths.config_candidates())
+    assert paths.config_rank(custom) > paths.config_rank(root / "jenkins-config.json")
+
+
+def test_config_rank_compares_resolved_paths(tmp_path, monkeypatch):
+    """验证比较两侧都先 resolve()：含 .. 的等价路径不会因未规范化而掉到末位"""
+    root, _, _ = _isolate_bases(tmp_path, monkeypatch)
+    candidate = root / "jenkins-config.yaml"
+
+    indirect = root / "data" / ".." / "jenkins-config.yaml"
+
+    assert paths.config_rank(indirect) == paths.config_rank(candidate)

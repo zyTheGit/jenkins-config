@@ -43,3 +43,19 @@ Resource 共用同一形状。
 不可用）表示"配置本身立不起来"，任何依赖配置的读操作都必须在此之前短路。
 `config_incomplete`（凭据仍是占位符）**不属于**这一组：它只影响访问 Jenkins，
 读本地构建历史照样成立。
+
+## Config priority order（配置优先级顺序）
+
+候选配置文件路径的全序：先按候选目录顺序（源码模式为项目根 → CWD → 用户级配置目录，
+EXE 模式为 CWD → exe 目录 → 用户级配置目录，每个目录先取它的 `.jenkins-config`
+子目录再取目录本身），同一目录内按 `CONFIG_FILE_NAMES`（yaml → yml → json）。
+这份顺序只写在 `paths.config_candidates()`：探测取第一份存在的是它，
+判定"哪份压过哪份"（`paths.config_rank()`，`init_config` 的遮蔽检查用它）也是它。
+
+## History anchoring（历史文件锚定）
+
+构建历史文件的位置规则：`<配置文件所在目录>/data/build_history.json`，
+只写在 `paths.resolve_history_path()`，且不要求配置文件真的存在。
+MCP 侧不直接用它，而用 `mcp/utils.history_path_for()`：先按白名单完成寻址再锚定。
+两个名字曾各自叫 `resolve_history_path` 而契约相反（一个收调用方原始参数、
+一个先校验），这是走错步的地方，故 MCP 侧入口改名。

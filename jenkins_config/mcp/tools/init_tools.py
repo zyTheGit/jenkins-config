@@ -35,8 +35,8 @@ from jenkins_config.mcp.utils import (
 from jenkins_config.paths import (
     APP_DIR_NAME,
     CONFIG_FILE_NAMES,
+    config_rank,
     resolve_config_file,
-    search_bases,
     user_config_dir,
 )
 
@@ -130,40 +130,21 @@ def _shadow_relation(target_path: Path) -> tuple[str, str]:
         ('', '')
     """
     try:
-        current = resolve_config_file().resolve()
+        current = resolve_config_file()
     except (OSError, RuntimeError) as exc:
         logger.warning("探测现有配置失败（%s），跳过遮蔽检查", exc)
         return "", ""
 
     target = target_path.resolve()
-    if not current.is_file() or current == target:
+    resolved_current = current.resolve()
+    if not current.is_file() or resolved_current == target:
         return "", ""
 
-    bases = [base.resolve() for base in search_bases()]
-
-    def _rank(path: Path) -> tuple[int, int]:
-        """按候选目录顺序 + 同目录内文件名顺序给配置文件打优先级（越小越优先）
-
-        只比目录是不够的：resolve_config_file() 在同一个目录里还会按
-        CONFIG_FILE_NAMES 依次取（yaml > yml > json），而本工具生成的恒是首位
-        名字，因此同目录下已有的 .yml / .json 也会被顶掉。落在候选之外
-        （如 JENKINS_MCP_CONFIG 指定的自定义文件名）时按末位处理。
-        """
-        try:
-            dir_rank = bases.index(path.parent)
-        except ValueError:
-            dir_rank = len(bases)
-        try:
-            name_rank = CONFIG_FILE_NAMES.index(path.name)
-        except ValueError:
-            name_rank = len(CONFIG_FILE_NAMES)
-        return dir_rank, name_rank
-
-    target_rank = _rank(target)
-    current_rank = _rank(current)
-    if target_rank < current_rank:
-        return str(current), ""
-    return "", str(current)
+    # 只比 paths 给出的优先级序号，不在这里重排"先看哪个目录、同目录先看哪个后缀"：
+    # 判定与探测不同源时，遮蔽检查会拦下它以为安全的那次写入
+    if config_rank(target) < config_rank(resolved_current):
+        return str(resolved_current), ""
+    return "", str(resolved_current)
 
 
 def _discard_created_dir(directory: Path, lock_name: str) -> None:

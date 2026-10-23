@@ -366,7 +366,7 @@ def test_trigger_build_general_error():
 # ============================================================================
 
 
-HISTORY_PATH_TARGET = "jenkins_config.mcp.tools.build_tools.resolve_history_path"
+HISTORY_PATH_TARGET = "jenkins_config.mcp.tools.build_tools.history_path_for"
 
 
 def _record(**overrides):

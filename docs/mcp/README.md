@@ -708,7 +708,7 @@ npx 用户装完之后没有任何配置文件，从零到 `list_environments` �
 
 - 目标文件不存在 + `overwrite=false`（默认）→ **直接创建，不需要** `JENKINS_MCP_ALLOW_WRITE`。门控保护的是既有资产，而这里的目标尚不存在；强制门控会让零配置用户从 1 步变 3 步（改 `mcp.json` → 重启客户端 → 再调用），最短上手路径直接失效
 - 目标文件已存在 + `overwrite=false` → 一律返回 `error_code: config_exists` 且**不做任何改动**，与门控状态无关。默认调用永远不可能损坏已有配置
-- 目标文件不存在，但生成后会**顶掉**另一份已生效的配置（典型场景：同目录顶层已有填好真实 token 的 `jenkins-config.yaml`，而点目录排在它前面）→ 同样返回 `config_exists`，`error` 中给出被遮蔽的路径。文件虽未被改动，但再没有人读它，连带 `data/build_history.json` 也一起失效，与"损坏"没有区别；判定按探测顺序比优先级，因此 `target='user'`（末位）不会因项目级配置存在而被拦
+- 目标文件不存在，但生成后会**顶掉**另一份已生效的配置（典型场景：同目录顶层已有填好真实 token 的 `jenkins-config.yaml`，而点目录排在它前面）→ 同样返回 `config_exists`，`error` 中给出被遮蔽的路径。文件虽未被改动，但再没有人读它，连带 `data/build_history.json` 也一起失效，与"损坏"没有区别；优先级比较用 `paths.config_rank()`（即 §7.1 探测列表里的下标），与本工具落盘后实际生效的那份同源，因此 `target='user'`（末位）不会因项目级配置存在而被拦
 - `overwrite=true` → 视为改动既有资产，**必须** `JENKINS_MCP_ALLOW_WRITE=1`，否则返回 `write_not_allowed`。放行后在**同一个** `file_lock(required=True)` 临界区内依次完成"复查目标是否存在 → 复制为 `.bak` → `atomic_write` 落盘"（与 `save_config` 共用 `backup_config_file()`，避免 CLI 与 MCP 并发写互相截断）。`.bak` 已被占用时退化为 `<名字>.<时间戳>.bak`：固定名意味着第二次覆写会把上一份备份也换成模板，而配置里往往就是唯一一份可用凭据
 
 - `target='cwd'` 但当前工作目录过宽（盘符 / 文件系统根）→ 返回 `config_path_denied`，并给出两条出路：改用 `target='user'`，或把目标目录追加到 `JENKINS_MCP_CONFIG_ROOTS`；若此时 HOME / USERPROFILE 也缺失（`target='user'` 同样走不通），归为 `home_unavailable`。CWD 恰为家目录时不拒绝：此时目标就是 `~/.jenkins-config`，与 `target='user'` 完全重合。该判定（`utils.write_target_denied()`）是**写入落点**策略，`save_config` 也调用同一个函数，避免"init 拒写、save 放行"两条不一致的写边界
@@ -809,7 +809,7 @@ MCP Prompts 提供预定义的交互流程模板，帮助 AI Agent 引导用户�
 
 调用方传入的 `config_path` 还受白名单约束：必须落在 `paths.search_bases()` 之内，或恰好是 `JENKINS_MCP_CONFIG` 指向的那个文件（该变量由部署方设定，属可信来源；其父目录**不**整树放行）。越界直接抛 `PermissionError`，可用 `JENKINS_MCP_CONFIG_ROOTS` 扩展。
 
-历史文件路径（`trigger_build` / `rebuild_last` / `show_history` 等使用）默认锚定到**配置文件所在目录**的 `data/build_history.json`；配置来自用户级配置目录时改锚到用户级数据目录，详见 §7.4。
+历史文件路径（`trigger_build` / `rebuild_last` / `show_history` 等使用）默认锚定到**配置文件所在目录**的 `data/build_history.json`；配置来自用户级配置目录时即 `~/.jenkins-config/data/`，详见 §7.4。锚定规则只写在 `paths.resolve_history_path()` 一处；MCP 侧统一走 `mcp/utils.history_path_for()`，它先按上文的白名单完成**寻址**，再交给那条锚定规则——因此越界的 `config_path` 在这里同样抛 `PermissionError`，工具不会因为"只是查个历史路径"而绕开白名单。
 
 ### 7.2 历史文件并发写入
 
@@ -903,7 +903,7 @@ MCP 相关测试位于 `tests/test_mcp/` 目录，覆盖：
 - `test_resources.py` — 4 个 Resource 的成功路径与失败形状（失败必须与 tool 同一组字段，且"没有历史文件"仍属合法状态而非失败）
 - `test_errors.py` — 错误码闭集、`failure_payload()` 的字段完整性、`classify()` 的阶段判别、`config_failure_payload()` / `unusable_config_payload()` 的构造结果，以及一条扫描 `ErrorCode.*` 引用的防拼写用例
 
-配置锚定本身的测试在 `tests/test_paths.py`（`search_bases_detail()` / `probe_report()` 的顺序与跳过原因）。
+配置锚定本身的测试在 `tests/test_paths.py`（`search_bases_detail()` / `probe_report()` 的顺序与跳过原因，`config_candidates()` 的"目录 × 后缀"顺序，以及 `config_rank()` 与探测命中同源、非候选路径排末位）。MCP 侧的历史路径入口 `history_path_for()` 另有用例守住"先寻址再锚定"（越界 `config_path` 抛 `PermissionError`）。
 
 运行方式：
 

@@ -4,7 +4,7 @@ MCP Tools - 构建历史查询工具
 提供构建历史记录和统计数据的查询功能。
 
 两个 tool 都在取 HistoryManager **之前**先做一次配置探测：历史文件路径由配置
-锚定，而 resolve_history_path 对"配置根本不存在"这种情况照样能算出一个 fallback
+锚定，而 utils.history_path_for 对"配置根本不存在"这种情况照样能算出一个 fallback
 路径，HistoryManager(create=False) 读不到文件时又不抛异常——两者叠加的结果是
 "没配置"和"确实没构建过"都返回空列表 / 全 0 统计，调用方无法区分，模型会顺着
 "没有历史"这个错误前提继续推理。因此配置类失败必须在取数据前短路成失败载荷。

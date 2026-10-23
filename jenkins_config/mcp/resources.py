@@ -20,8 +20,8 @@ from jenkins_config.mcp.utils import (
     environments_payload,
     get_config,
     history_manager,
+    history_path_for,
     projects_payload,
-    resolve_history_path,
 )
 
 
@@ -118,7 +118,7 @@ def _history_or_message() -> tuple[Any, Any]:
         >>> _history_or_message()  # doctest: +SKIP
         (<jenkins_config.history.HistoryManager object at ...>, None)
     """
-    history_file = resolve_history_path()
+    history_file = history_path_for()
     if not history_file.exists():
         return None, {"message": f"构建历史文件不存在: {history_file}"}
     return history_manager(history_file=str(history_file)), None

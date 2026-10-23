@@ -404,12 +404,24 @@ def test_resolve_config_path_frozen_mode_prefers_cwd(tmp_path, monkeypatch):
     assert result == str(cwd_config.resolve())
 
 
-def test_resolve_history_path_anchors_to_config_dir(tmp_path):
-    """验证历史文件路径锚定到配置文件同级 data 目录"""
-    from jenkins_config.mcp.utils import resolve_history_path
+def test_history_path_for_addresses_before_anchoring(tmp_path, monkeypatch):
+    """验证 MCP 侧历史路径先寻址再锚定，而不是直接折算调用方参数
+
+    锚定规则本身只写在 paths.resolve_history_path（由
+    test_resolve_history_path_anchors_beside_config 覆盖）；这里守住的是 MCP 侧
+    多出来的那一步：白名单外的 config_path 必须直接拒绝，否则查询工具可以借
+    "历史文件在哪"探测任意目录，配置文件白名单就只剩一半生效。
+    """
+    from jenkins_config.mcp import utils
 
     config_file = tmp_path / "jenkins-config.yaml"
-    assert resolve_history_path(str(config_file)) == tmp_path / "data" / "build_history.json"
+
+    monkeypatch.delenv(utils.CONFIG_ROOTS_ENV_VAR, raising=False)
+    with pytest.raises(PermissionError):
+        utils.history_path_for(str(config_file))
+
+    monkeypatch.setenv(utils.CONFIG_ROOTS_ENV_VAR, str(tmp_path))
+    assert utils.history_path_for(str(config_file)) == tmp_path / "data" / "build_history.json"
 
 
 def test_resolve_config_path_prefers_env_var(tmp_path, monkeypatch):

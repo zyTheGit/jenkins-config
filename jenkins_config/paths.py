@@ -7,7 +7,8 @@ CLI（cli.py / cmd_build.py / cmd_list.py）与 MCP Server（mcp/utils.py）
 锚定规则：
 1. 显式绝对路径原样使用；
 2. 显式相对路径按运行模式在候选目录中查找，找不到则回退第一个候选目录；
-3. 未指定路径时在候选目录中按 CONFIG_FILE_NAMES 顺序探测；
+3. 未指定路径时在候选目录中按 CONFIG_FILE_NAMES 顺序探测，这份顺序只写在
+   config_candidates() 里（优先级判定 config_rank() 也读它）；
 4. 候选目录顺序（每个非用户级目录都先看其 .jenkins-config 子目录，再看目录本身）：
    - 源码模式：项目根/.jenkins-config → 项目根 → CWD/.jenkins-config → CWD
      → 用户级配置目录
@@ -243,6 +244,27 @@ def search_bases() -> list[Path]:
     ]
 
 
+def config_candidates() -> list[Path]:
+    """按优先级列出全部候选配置文件路径（"哪份配置压过哪份"的唯一来源）
+
+    顺序就是 resolve_config_file() 的探测顺序：先按 search_bases() 的候选目录，
+    同一目录内再按 CONFIG_FILE_NAMES（yaml > yml > json）。这个二维顺序此前只写在
+    探测循环里，于是 init_config 判"生成模板会不会顶掉现有配置"时只能把同一套顺序
+    再实现一遍——遮蔽检查正是两套顺序一旦静默分歧就最伤的地方。
+
+    只给顺序，不判存在性：要探测的调用方自己挑第一个存在的，要比优先级的调用方
+    把路径映射成序号（见 config_rank）。
+
+    Returns:
+        候选路径列表（未解析符号链接），长度为候选目录数 × CONFIG_FILE_NAMES 数
+
+    Example:
+        >>> [p.name for p in config_candidates()][:3]
+        ['jenkins-config.yaml', 'jenkins-config.yml', 'jenkins-config.json']
+    """
+    return [base / name for base in search_bases() for name in CONFIG_FILE_NAMES]
+
+
 def _expand(path: Path) -> Path:
     """展开 ~ 前缀，home 不可解析时退回原值
 
@@ -331,6 +353,9 @@ def resolve_config_file(config_arg: str | Path = "") -> Path:
     环境变量 JENKINS_MCP_CONFIG 由 MCP 侧在调用本函数前折算为 config_arg，
     本函数不读取它，避免该变量影响 CLI（见模块 docstring）。
 
+    自动探测的顺序完全委托 config_candidates()：本函数不再自己排"先看哪个目录、
+    同目录先看哪个后缀"，那份顺序另立一份就会与优先级判定分歧。
+
     Args:
         config_arg: 用户指定的路径，为空时自动探测
 
@@ -350,14 +375,37 @@ def resolve_config_file(config_arg: str | Path = "") -> Path:
             return path
         return resolve_relative(path)
 
-    bases = search_bases()
-    for base in bases:
-        for name in CONFIG_FILE_NAMES:
-            candidate = base / name
-            if candidate.exists():
-                return candidate
+    candidates = config_candidates()
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
 
-    return bases[0] / CONFIG_FILE_NAMES[0]
+    return candidates[0]
+
+
+def config_rank(config_file: str | Path) -> int:
+    """把配置文件路径折算成优先级序号（越小越优先）
+
+    序号就是该文件在 config_candidates() 里的位置，因此"探测挑中谁"与
+    "判定谁压过谁"天然同源。两侧都先 resolve()：符号链接目录下的未解析路径
+    会落在候选之外，把高优先级配置误判成末位。不在候选之内（如
+    JENKINS_MCP_CONFIG 指定的自定义文件名）按末位处理。
+
+    Args:
+        config_file: 配置文件路径
+
+    Returns:
+        在 config_candidates() 中的下标；不属于任何候选时返回候选总数
+
+    Example:
+        >>> config_rank(config_candidates()[0])
+        0
+    """
+    ordered = [candidate.resolve() for candidate in config_candidates()]
+    try:
+        return ordered.index(_expand(Path(config_file)).resolve())
+    except ValueError:
+        return len(ordered)
 
 
 def resolve_history_path(config_file: str | Path = "") -> Path:

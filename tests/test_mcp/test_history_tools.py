@@ -259,7 +259,7 @@ def test_history_query_does_not_create_files(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
         utils,
-        "resolve_history_path",
+        "history_path_for",
         lambda config_path="": tmp_path / "data" / "build_history.json",
     )
 
