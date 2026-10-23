@@ -23,7 +23,8 @@ from .jenkins import BuildStatus
 from .utils import log_error, log_info, log_success, log_warn
 
 if TYPE_CHECKING:
-    from .config_types import Config, Job
+    from .config import Config
+    from .config_types import Job
     from .history import BuildRecord
     from .jenkins import JenkinsClient
 
@@ -170,7 +171,7 @@ def parse_params(text: str) -> tuple[dict[str, Any], list[str]]:
         return parsed, skipped
 
     # key=value&key=value 格式复用配置层已有的解析实现，避免规则漂移
-    from .config_io import _parse_params_field
+    from .config_load import _parse_params_field
 
     return _parse_params_field(text), []
 

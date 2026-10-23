@@ -1,73 +1,227 @@
 # jenkins_config/config.py
 """
-配置模块 - 配置类型、I/O 和业务逻辑的汇总入口
+配置模块 - Config 接口
 
-本模块重新导出所有配置类型，并提供 job 相关的业务方法。
+Config 的字段、加载/保存、Job 派生与分支字段解析都定义在本模块。
+纯数据类型在 config_types.py，文件解析/序列化/模板在 config_io.py。
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Optional
 
 from .config_io import (
     config_to_dict,
     generate_template,
-    load_config as _load_config,
     save_config as _save_config,
     show_template,
 )
-
-# 重新导出所有类型
+from .config_load import parse_config_file
 from .config_types import (
-    Config,
+    BuildConfig,
+    Environment,
     Job,
     Project,
+    ServerConfig,
 )
 
 if TYPE_CHECKING:
     from .history import BuildRecord
 
 
-# ============================================================================
-# 将 I/O 方法附加到 Config 类（保持 Config.load() 调用方式不变）
-# ============================================================================
-
-Config.load = classmethod(lambda cls, path: _load_config(path))  # type: ignore[assignment]
-Config.save = lambda self, path: _save_config(self, path)  # type: ignore[assignment]
-Config.to_dict = lambda self: config_to_dict(self)  # type: ignore[assignment]
-Config.generate_template = staticmethod(lambda: generate_template())  # type: ignore[assignment]
-Config.show_template = staticmethod(lambda: show_template())  # type: ignore[assignment]
-
-
-# ============================================================================
-# Job 业务方法
-# ============================================================================
-
-
-def _branch_field_for(self: Config, env: Optional[str] = None) -> str:
+@dataclass
+class Config:
     """
-    获取指定环境生效的分支参数名
+    主配置类
 
-    优先级: 环境级 branch_field > 全局 branch_field。
-    这是分支字段解析的唯一入口，CLI 与 MCP Server 都应通过它取值，
-    避免在调用方各自重复实现优先级规则。
-
-    Args:
-        env: 环境名称，为空或环境不存在时退回全局配置
-
-    Returns:
-        分支参数名，如 "branch" 或 "BRANCH_NAME"
-
-    Example:
-        >>> config.branch_field_for("dev")
-        'BRANCH_NAME'
-        >>> config.branch_field_for(None)
-        'branch'
+    Attributes:
+        server: Jenkins 服务器配置
+        build: 构建行为配置
+        branch_field: CLI -b/--branch 使用的参数名（默认: branch）
+        environments: 环境配置字典（按环境名索引）
     """
-    env_config = self.environments.get(env) if env else None
-    if env_config is not None and env_config.branch_field:
-        return env_config.branch_field
-    return self.branch_field
+
+    server: ServerConfig = field(default_factory=lambda: ServerConfig("", ""))
+    build: BuildConfig = field(default_factory=BuildConfig)
+    branch_field: str = "branch"
+    environments: dict[str, Environment] = field(default_factory=dict)
+
+    @classmethod
+    def load(cls, path: str) -> Config:
+        """
+        从文件加载配置（自动检测 YAML/JSON）
+
+        Args:
+            path: 配置文件路径
+
+        Returns:
+            Config 对象
+
+        Raises:
+            FileNotFoundError: 配置文件不存在
+            ValueError: 文件格式不支持或不合法
+        """
+        return cls(**parse_config_file(path))
+
+    def save(self, path: str) -> None:
+        """
+        将配置原子写入 YAML 文件
+
+        Args:
+            path: 目标文件路径
+
+        Note:
+            全程持有与目标文件同名的进程间锁，并通过 atomic_write 原子替换，
+            避免 CLI 与 MCP Server 同时保存配置时互相覆盖或写出被截断的文件
+        """
+        _save_config(self, path)
+
+    def to_dict(self) -> dict[str, Any]:
+        """将 Config 对象序列化为字典"""
+        return config_to_dict(self)
+
+    @staticmethod
+    def generate_template() -> dict[str, Any]:
+        """生成最小配置文件模板字典"""
+        return generate_template()
+
+    @staticmethod
+    def show_template() -> None:
+        """打印配置文件模板说明（CLI --show-template）"""
+        show_template()
+
+    def branch_field_for(self, env: Optional[str] = None) -> str:
+        """
+        获取指定环境生效的分支参数名
+
+        优先级: 环境级 branch_field > 全局 branch_field。
+        这是分支字段解析的唯一入口，CLI 与 MCP Server 都应通过它取值，
+        避免在调用方各自重复实现优先级规则。
+
+        Args:
+            env: 环境名称，为空或环境不存在时退回全局配置
+
+        Returns:
+            分支参数名，如 "branch" 或 "BRANCH_NAME"
+
+        Example:
+            >>> config.branch_field_for("dev")
+            'BRANCH_NAME'
+            >>> config.branch_field_for(None)
+            'branch'
+        """
+        env_config = self.environments.get(env) if env else None
+        if env_config is not None and env_config.branch_field:
+            return env_config.branch_field
+        return self.branch_field
+
+    def get_jobs(
+        self,
+        env: Optional[str] = None,
+        jobs: Optional[list[str]] = None,
+    ) -> list[Job]:
+        """
+        获取要构建的 Job 列表
+
+        参数合并规则: 项目 params > 环境 params（简单的 dict update）
+        分支派生: 从 params 中根据 branch_field 提取
+
+        Args:
+            env: 按环境过滤
+            jobs: 按项目过滤，格式 ["env:project"] 或 ["project"]
+
+        Returns:
+            Job 列表
+        """
+        result = []
+
+        for env_name, env_config in self.environments.items():
+            if env and env != env_name:
+                continue
+
+            env_branch_field = self.branch_field_for(env_name)
+
+            for project in env_config.projects:
+
+                job_key = f"{env_name}_{project.name.replace('-', '_')}"
+
+                if jobs and not _match_job_filter(job_key, project, env_name, jobs):
+                    continue
+
+                # 参数合并: 项目 params > 环境 params
+                merged_params = {}
+                merged_params.update(env_config.params)
+                merged_params.update(project.params)
+
+                effective_branch = merged_params.get(env_branch_field, "")
+
+                result.append(
+                    Job(
+                        key=job_key,
+                        path=project.path or project.name,
+                        branch=effective_branch,
+                        params=merged_params,
+                        env=env_name,
+                        project_name=project.name,
+                    )
+                )
+
+        return result
+
+    def list_environments(self) -> list[tuple[str, str]]:
+        """列出所有环境名称和描述"""
+        return [(name, env.description) for name, env in self.environments.items()]
+
+    def list_projects(self, env: Optional[str] = None) -> list[tuple[str, str, str]]:
+        """列出项目，返回 (env, name, path) 元组列表"""
+        result = []
+        for env_name, env_config in self.environments.items():
+            if env and env != env_name:
+                continue
+            for project in env_config.projects:
+                result.append((env_name, project.name, project.path or project.name))
+        return result
+
+    def create_job_from_record(self, record: BuildRecord) -> Optional[Job]:
+        """从历史记录创建 Job（用于重建功能）"""
+        env_config = self.environments.get(record.env)
+        if not env_config:
+            return None
+
+        project_name = record.project_name
+        if not project_name:
+            project_name = project_name_from_job_key(record.env, record.job_key)
+            if not project_name:
+                return None
+
+        for project in env_config.projects:
+            if project.name == project_name:
+                job_key = f"{record.env}_{project.name.replace('-', '_')}"
+
+                if record.params:
+                    merged_params = dict(record.params)
+                else:
+                    merged_params = {}
+                    merged_params.update(env_config.params)
+                    merged_params.update(project.params)
+
+                env_branch_field = self.branch_field_for(record.env)
+
+                effective_branch = merged_params.get(
+                    env_branch_field, record.branch or ""
+                )
+
+                return Job(
+                    key=job_key,
+                    path=project.path or project.name,
+                    branch=effective_branch,
+                    params=merged_params,
+                    env=record.env,
+                    project_name=project.name,
+                )
+
+        return None
 
 
 def project_name_from_job_key(env: str, job_key: str) -> Optional[str]:
@@ -121,60 +275,6 @@ def env_from_job_key(job_key: str) -> str:
     return job_key.split("_", 1)[0]
 
 
-def _get_jobs(
-    self: Config,
-    env: Optional[str] = None,
-    jobs: Optional[list[str]] = None,
-) -> list[Job]:
-    """
-    获取要构建的 Job 列表
-
-    参数合并规则: 项目 params > 环境 params（简单的 dict update）
-    分支派生: 从 params 中根据 branch_field 提取
-
-    Args:
-        env: 按环境过滤
-        jobs: 按项目过滤，格式 ["env:project"] 或 ["project"]
-
-    Returns:
-        Job 列表
-    """
-    result = []
-
-    for env_name, env_config in self.environments.items():
-        if env and env != env_name:
-            continue
-
-        env_branch_field = self.branch_field_for(env_name)
-
-        for project in env_config.projects:
-
-            job_key = f"{env_name}_{project.name.replace('-', '_')}"
-
-            if jobs and not _match_job_filter(job_key, project, env_name, jobs):
-                continue
-
-            # 参数合并: 项目 params > 环境 params
-            merged_params = {}
-            merged_params.update(env_config.params)
-            merged_params.update(project.params)
-
-            effective_branch = merged_params.get(env_branch_field, "")
-
-            result.append(
-                Job(
-                    key=job_key,
-                    path=project.path or project.name,
-                    branch=effective_branch,
-                    params=merged_params,
-                    env=env_name,
-                    project_name=project.name,
-                )
-            )
-
-    return result
-
-
 def _match_job_filter(
     job_key: str, project: Project, env_name: str, jobs: list[str]
 ) -> bool:
@@ -187,69 +287,3 @@ def _match_job_filter(
         elif job_spec == project.name:
             return True
     return False
-
-
-def _list_environments(self: Config) -> list[tuple[str, str]]:
-    """列出所有环境名称和描述"""
-    return [(name, env.description) for name, env in self.environments.items()]
-
-
-def _list_projects(
-    self: Config, env: Optional[str] = None
-) -> list[tuple[str, str, str]]:
-    """列出项目，返回 (env, name, path) 元组列表"""
-    result = []
-    for env_name, env_config in self.environments.items():
-        if env and env != env_name:
-            continue
-        for project in env_config.projects:
-            result.append((env_name, project.name, project.path or project.name))
-    return result
-
-
-def _create_job_from_record(self: Config, record: BuildRecord) -> Optional[Job]:
-    """从历史记录创建 Job（用于重建功能）"""
-    env_config = self.environments.get(record.env)
-    if not env_config:
-        return None
-
-    project_name = record.project_name
-    if not project_name:
-        project_name = project_name_from_job_key(record.env, record.job_key)
-        if not project_name:
-            return None
-
-    for project in env_config.projects:
-        if project.name == project_name:
-            job_key = f"{record.env}_{project.name.replace('-', '_')}"
-
-            if record.params:
-                merged_params = dict(record.params)
-            else:
-                merged_params = {}
-                merged_params.update(env_config.params)
-                merged_params.update(project.params)
-
-            env_branch_field = self.branch_field_for(record.env)
-
-            effective_branch = merged_params.get(env_branch_field, record.branch or "")
-
-
-            return Job(
-                key=job_key,
-                path=project.path or project.name,
-                branch=effective_branch,
-                params=merged_params,
-                env=record.env,
-                project_name=project.name,
-            )
-
-    return None
-
-
-# 附加业务方法到 Config 类
-Config.get_jobs = _get_jobs
-Config.list_environments = _list_environments
-Config.list_projects = _list_projects
-Config.create_job_from_record = _create_job_from_record
-Config.branch_field_for = _branch_field_for

@@ -12,6 +12,7 @@ list 型 tool 返回**单元素列表且元素只含这五个键**——旧实�
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -105,16 +106,7 @@ def show_config(config_path: str = "") -> dict[str, Any]:
             "username": config.server.username,
             "token": masked_token,
             "environments": environments,
-            "build_config": {
-                "mode": config.build.mode,
-                "poll_interval": config.build.poll_interval,
-                "queue_timeout": config.build.queue_timeout,
-                "build_timeout": config.build.build_timeout,
-                "curl_timeout": config.build.curl_timeout,
-                "max_parallel": config.build.max_parallel,
-                "log_dir": config.build.log_dir,
-                "log_retention_days": config.build.log_retention_days,
-            },
+            "build_config": asdict(config.build),
         }
     except Exception as e:
         return config_failure_payload(config_path, e, "加载配置失败")

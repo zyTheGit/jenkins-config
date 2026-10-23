@@ -452,7 +452,7 @@ def inspect_config(config_path: str = "") -> ConfigInspection:
     它们需要的是"卡在第几层"，而不是再接一层 try。
 
     "完整"只能靠占位符比对判定：模板里的 http://your-jenkins-server:8080 /
-    your-api-token 都非空，能通过 config_io._validate_config，所以一份只 init 过
+    your-api-token 都非空，能通过 config_load._validate_config，所以一份只 init 过
     没填过的配置照样加载成功（见 config_io.PLACEHOLDER_VALUES 注释）。
 
     可读性这一层会把文件读一遍，随后 Config.load 又读一遍。多一次读的代价换来

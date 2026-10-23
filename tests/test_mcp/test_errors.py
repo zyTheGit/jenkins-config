@@ -14,7 +14,7 @@ import json
 
 import pytest
 
-from jenkins_config.config_io import VALIDATION_ERROR_PREFIX
+from jenkins_config.config_load import VALIDATION_ERROR_PREFIX
 from jenkins_config.mcp.errors import (
     CONFIG_UNUSABLE_CODES,
     NEXT_STEPS,
@@ -140,7 +140,7 @@ def test_classify_json_error_is_parse_error():
 def test_classify_validation_error_is_incomplete():
     """验证必填字段为空归入 config_incomplete，而非 parse_error
 
-    两者都是 ValueError，靠 config_io.VALIDATION_ERROR_PREFIX 这一共用常量分流：
+    两者都是 ValueError，靠 config_load.VALIDATION_ERROR_PREFIX 这一共用常量分流：
     "字段没填"要去编辑配置，"语法坏了"要去修 YAML，建议完全不同。
     """
     exc = ValueError(f"{VALIDATION_ERROR_PREFIX}server.url 不能为空")

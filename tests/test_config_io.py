@@ -23,10 +23,10 @@ from jenkins_config.config_types import (
 from jenkins_config.config_io import (
     config_to_dict,
     _project_to_dict,
-    _parse_params_field,
     generate_template,
     show_template,
 )
+from jenkins_config.config_load import _parse_params_field
 
 
 # ============================================================================
@@ -306,7 +306,7 @@ def test_placeholder_template_passes_validation(tmp_path):
 
 def test_validation_error_prefix_is_shared():
     """必填校验的错误前缀取自共用常量（mcp/errors.classify 依赖它分流）"""
-    from jenkins_config.config_io import VALIDATION_ERROR_PREFIX, _validate_config
+    from jenkins_config.config_load import VALIDATION_ERROR_PREFIX, _validate_config
 
     with pytest.raises(ValueError) as exc_info:
         _validate_config(ServerConfig(url="", username="admin", token="t"))
@@ -403,3 +403,85 @@ def test_template_text_output_is_loadable_as_config(tmp_path):
     config = Config.load(str(config_file))
 
     assert [name for name, _ in config.list_environments()] == ["dev", "prod"]
+
+
+# ============================================================================
+# 字段清单单源（防漂移）
+# ============================================================================
+
+
+def test_template_field_specs_cover_dataclass_fields():
+    """模板字段说明必须覆盖 ServerConfig / BuildConfig 的每个字段
+
+    新增配置字段却忘了补说明时，AI 客户端拿到的字段清单会与真实配置结构脱节。
+    """
+    from dataclasses import fields
+
+    from jenkins_config.config_io import TEMPLATE_FIELD_SPECS
+    from jenkins_config.config_types import BuildConfig, ServerConfig
+
+    documented = {key for key, _, _ in TEMPLATE_FIELD_SPECS}
+    missing = [
+        f"{prefix}.{field.name}"
+        for cls, prefix in ((ServerConfig, "server"), (BuildConfig, "build"))
+        for field in fields(cls)
+        if f"{prefix}.{field.name}" not in documented
+    ]
+
+    assert not missing, f"TEMPLATE_FIELD_SPECS 缺少字段说明: {missing}"
+
+
+def _non_default_value(field):
+    """按默认值类型造一个不同的取值，用于字段覆盖测试"""
+    from dataclasses import MISSING
+
+    default = field.default
+    if default is MISSING:
+        return "probe-value"
+    if isinstance(default, bool):
+        return not default
+    if isinstance(default, int):
+        return default + 1
+    if isinstance(default, str):
+        return f"{default}-custom"
+    raise AssertionError(f"未覆盖的字段类型: {field.name}")
+
+
+def test_every_build_field_round_trips(tmp_path):
+    """BuildConfig 每个字段都能保存并重新加载
+
+    保存、模板、向导与 show_config 都从 dataclasses.asdict 取字段；这个用例
+    保证加载侧同样覆盖全部字段，新增字段若漏读会立即失败。
+    """
+    from dataclasses import fields
+
+    from jenkins_config.config_types import BuildConfig
+
+    build = BuildConfig(
+        **{field.name: _non_default_value(field) for field in fields(BuildConfig)}
+    )
+    config = _make_config()
+    config.build = build
+
+    config_file = tmp_path / "roundtrip.yaml"
+    config.save(str(config_file))
+
+    assert Config.load(str(config_file)).build == build
+
+
+def test_every_server_field_round_trips(tmp_path):
+    """ServerConfig 每个字段都能保存并重新加载"""
+    from dataclasses import fields
+
+    from jenkins_config.config_types import ServerConfig
+
+    server = ServerConfig(
+        **{field.name: _non_default_value(field) for field in fields(ServerConfig)}
+    )
+    config = _make_config()
+    config.server = server
+
+    config_file = tmp_path / "server-roundtrip.yaml"
+    config.save(str(config_file))
+
+    assert Config.load(str(config_file)).server == server

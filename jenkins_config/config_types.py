@@ -3,15 +3,13 @@
 配置数据类型定义
 
 本模块只包含纯 dataclass 定义，不包含任何 I/O 或业务逻辑。
+Config 接口（加载/保存/Job 派生）定义在 config.py。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from .history import BuildRecord
+from typing import Any
 
 
 @dataclass
@@ -117,52 +115,3 @@ class Job:
     params: dict[str, Any]
     env: str
     project_name: str = ""
-
-
-@dataclass
-class Config:
-    """
-    主配置类
-
-    Attributes:
-        server: Jenkins 服务器配置
-        build: 构建行为配置
-        branch_field: CLI -b/--branch 使用的参数名（默认: branch）
-        environments: 环境配置字典（按环境名索引）
-    """
-
-    server: ServerConfig = field(default_factory=lambda: ServerConfig("", ""))
-    build: BuildConfig = field(default_factory=BuildConfig)
-    branch_field: str = "branch"
-    environments: dict[str, Environment] = field(default_factory=dict)
-
-    # 以下方法在 config.py 中通过猴子补丁添加，此处仅为类型检查器提供签名
-    if TYPE_CHECKING:
-        @staticmethod
-        def show_template() -> None: ...
-
-        @staticmethod
-        def generate_template() -> dict[str, Any]: ...
-
-        @classmethod
-        def load(cls, path: str) -> Config: ...
-
-        def save(self, path: str) -> None: ...
-
-        def to_dict(self) -> dict[str, Any]: ...
-
-        def get_jobs(
-            self,
-            env: str | None = None,
-            jobs: list[str] | None = None,
-        ) -> list[Job]: ...
-
-        def list_environments(self) -> list[tuple[str, str]]: ...
-
-        def list_projects(
-            self, env: str | None = None
-        ) -> list[tuple[str, str, str]]: ...
-
-        def create_job_from_record(
-            self, record: BuildRecord
-        ) -> Job | None: ...

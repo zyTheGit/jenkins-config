@@ -13,6 +13,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from jenkins_config.config import Config
 from jenkins_config.config_types import BuildConfig, ServerConfig
 from jenkins_config.jenkins import BuildStatus
 
@@ -25,7 +26,7 @@ from jenkins_config.jenkins import BuildStatus
 @pytest.fixture
 def mock_config():
     """创建 mock Config 实例"""
-    config = Mock()  # 不使用 spec，因为 Config 的方法是猴子补丁添加的
+    config = Mock(spec=Config)
     config.server = ServerConfig(
         url="http://jenkins:8080",
         username="admin",

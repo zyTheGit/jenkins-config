@@ -239,10 +239,31 @@ def test_build_config_defaults():
 
 def test_config_defaults():
     """Config dataclass 默认值"""
-    from jenkins_config.config_types import Config
     c = Config()
     assert c.branch_field == "branch"
     assert c.environments == {}
+
+
+def test_config_interface_lives_on_the_class():
+    """Config 接口由 config.Config 自身定义，不依赖导入时补的猴子补丁"""
+    assert Config.__module__ == "jenkins_config.config"
+
+    methods = (
+        "load",
+        "save",
+        "to_dict",
+        "generate_template",
+        "show_template",
+        "branch_field_for",
+        "get_jobs",
+        "list_environments",
+        "list_projects",
+        "create_job_from_record",
+    )
+    for name in methods:
+        attr = getattr(Config, name)
+        func = getattr(attr, "__func__", attr)
+        assert func.__qualname__ == f"Config.{name}", name
 
 
 # ============================================================================

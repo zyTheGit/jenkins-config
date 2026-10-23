@@ -6,13 +6,14 @@
 """
 
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 import questionary
 import yaml
 
 from .config_io import template_text
-from .config_types import BuildConfig
+from .config_types import BuildConfig, ServerConfig
 
 from .utils import CUSTOM_STYLE, log_error, log_info, log_success, log_warn, print_header, print_sep
 
@@ -214,21 +215,8 @@ def _run_init_interactive(config_file: Path):
     print_sep("=")
 
     config_data = {
-        "server": {
-            "url": url,
-            "username": username,
-            "token": token,
-        },
-        "build": {
-            "mode": build_conf.mode,
-            "poll_interval": build_conf.poll_interval,
-            "queue_timeout": build_conf.queue_timeout,
-            "build_timeout": build_conf.build_timeout,
-            "curl_timeout": build_conf.curl_timeout,
-            "log_dir": build_conf.log_dir,
-            "log_retention_days": build_conf.log_retention_days,
-            "max_parallel": build_conf.max_parallel,
-        },
+        "server": asdict(ServerConfig(url=url, username=username, token=token)),
+        "build": asdict(build_conf),
     }
 
     if environments:

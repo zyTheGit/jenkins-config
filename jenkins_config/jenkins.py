@@ -33,7 +33,7 @@ from urllib3.util.retry import Retry
 from .utils import log_debug, log_warn, is_debug_mode
 
 if TYPE_CHECKING:
-    from .config_types import Config
+    from .config import Config
 
 # Git Parameter 插件的 _class 标识
 _GIT_PARAM_CLASS = "GitParameterDefinition"

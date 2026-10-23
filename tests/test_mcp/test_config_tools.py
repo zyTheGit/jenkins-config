@@ -15,6 +15,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from jenkins_config.config import Config
 from jenkins_config.config_types import BuildConfig, ServerConfig
 from jenkins_config.mcp.utils import WRITE_ENV_VAR
 
@@ -27,7 +28,7 @@ from jenkins_config.mcp.utils import WRITE_ENV_VAR
 @pytest.fixture
 def mock_config():
     """创建 mock Config 实例"""
-    config = Mock()  # 不使用 spec，因为 Config 的方法是猴子补丁添加的
+    config = Mock(spec=Config)
     config.server = ServerConfig(
         url="http://jenkins:8080",
         username="admin",
@@ -75,7 +76,7 @@ def test_list_environments_returns_correct_format(mock_config):
 
 def test_list_environments_empty_config():
     """验证空配置时 list_environments 返回空列表"""
-    empty_config = Mock()  # 不使用 spec
+    empty_config = Mock(spec=Config)
     empty_config.list_environments.return_value = []
 
     with patch("jenkins_config.mcp.tools.config_tools.get_config", return_value=empty_config):
@@ -182,7 +183,7 @@ def test_show_config_token_masking(mock_config):
 
 def test_show_config_short_token_masking():
     """验证短 token 同样完全脱敏"""
-    config = Mock()  # 不使用 spec
+    config = Mock(spec=Config)
     config.server = ServerConfig(url="http://localhost", username="admin", token="abc")
     config.build = BuildConfig()
     config.list_environments.return_value = []

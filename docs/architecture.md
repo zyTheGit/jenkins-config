@@ -23,8 +23,9 @@ jenkins-config/
 │   ├── cmd_interactive.py      # 交互式选择
 │   ├── cmd_list.py             # 列表查询
 │   ├── config_types.py         # 配置数据类型（纯 dataclass）
-│   ├── config_io.py            # 配置 I/O（YAML/JSON 加载、保存）
-│   ├── config.py               # 配置业务方法（猴子补丁）
+│   ├── config_load.py          # 配置加载/校验/旧格式兼容
+│   ├── config_io.py            # 配置保存/序列化/模板
+│   ├── config.py               # Config 接口（加载/保存/Job/分支字段）
 │   ├── paths.py                # 配置/历史路径锚定（CLI 与 MCP 共用）
 │   ├── filelock.py             # 跨进程文件锁 + 原子写
 │   ├── build_flow.py           # 构建流程（选择/阻塞/队列，CLI 与 MCP 共用）
@@ -54,11 +55,12 @@ MCP Server 内部结构见 [MCP Server 文档](mcp/README.md)。
         ┌─────────────────────┼─────────────────────┐
         ▼                     ▼                     ▼
 ┌───────────────┐   ┌───────────────┐   ┌───────────────┐
-│ config_types  │   │ build_flow.py │   │  history.py   │
-│ config_io     │   │ (构建流程)    │   │  (历史记录)   │
-│ config.py     │   └───────────────┘   └───────────────┘
-│ (配置加载)    │           │
-└───────────────┘           ▼
+│ config.py     │   │ build_flow.py │   │  history.py   │
+│ (Config 接口) │   │ (构建流程)    │   │  (历史记录)   │
+│ config_types  │   └───────────────┘   └───────────────┘
+│ config_load   │           │
+│ config_io     │           ▼
+│ (数据/加载/IO)│
                     ┌───────────────┐
                     │  jenkins.py   │
                     │ (Jenkins API) │

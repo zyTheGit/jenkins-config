@@ -11,7 +11,8 @@ def client():
 
 def test_from_config_uses_server_and_curl_timeout():
     """客户端构造只从 Config 推导连接参数与超时"""
-    from jenkins_config.config_types import BuildConfig, Config, ServerConfig
+    from jenkins_config.config import Config
+    from jenkins_config.config_types import BuildConfig, ServerConfig
 
     config = Config(
         server=ServerConfig(

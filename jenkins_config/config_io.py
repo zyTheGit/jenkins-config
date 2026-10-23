@@ -1,48 +1,39 @@
 # jenkins_config/config_io.py
 """
-配置 I/O 模块 - 负责配置文件的加载、保存和模板生成
+配置 I/O 模块 - 负责配置保存、序列化与模板生成
 
-本模块包含 Config 类的 I/O 相关方法和向后兼容处理。
+Config 接口（字段与方法）在 config.py，加载/校验在 config_load.py；
+本模块只负责写出方向（保存、序列化、模板）。
 """
 
 from __future__ import annotations
 
 import json
-import logging
+from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .config_types import (
     BuildConfig,
-    Config,
-    Environment,
     Project,
     ServerConfig,
 )
 from .filelock import atomic_write, file_lock
 
-
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from .config import Config
 
 
 # 模板占位符取值（键为配置内的点分路径）
 #
-# 这些取值非空，能通过 _validate_config，所以 Config.load 对一份"只 init 过、
-# 还没填"的配置会成功返回。也就是说"配置未完成"只能靠占位符比对判定，不能靠
-# 加载是否抛错。判据与模板必须同源：若两处各写一份字面量，改了模板忘改判据时
-# doctor 会把未填配置报成"已完成"，那比没有这项检查更糟。
+# 这些取值非空，能通过 config_load._validate_config，所以 Config.load 对一份
+# "只 init 过、还没填"的配置会成功返回。也就是说"配置未完成"只能靠占位符比对
+# 判定，不能靠加载是否抛错。判据与模板必须同源：若两处各写一份字面量，改了模板
+# 忘改判据时 doctor 会把未填配置报成"已完成"，那比没有这项检查更糟。
 PLACEHOLDER_VALUES: dict[str, str] = {
     "server.url": "http://your-jenkins-server:8080",
     "server.token": "your-api-token",
 }
-
-# 必填字段校验失败的错误前缀
-#
-# mcp/errors.classify 靠它把"字段没填"从"文件格式不合法"里分出来：两者都是
-# ValueError，异常类型无法区分，而给用户的下一步动作完全不同（填字段 vs 修语法）。
-# 备选是新增一个专用异常类型，但那会改变 CLI 侧既有的 ValueError 捕获语义，
-# 代价大于收益，因此选择把字面量收敛为常量、由两侧共用。
-VALIDATION_ERROR_PREFIX = "配置错误: "
 
 # YAML 配置文件的头部注释
 #
@@ -92,220 +83,11 @@ TEMPLATE_FIELD_SPECS: tuple[tuple[str, str, bool], ...] = (
 
 
 # ============================================================================
-# 加载
+# 保存和序列化
 # ============================================================================
 
 
-def load_config(config_path: str) -> Config:
-    """
-    从文件加载配置（自动检测 YAML/JSON）
-
-    Args:
-        config_path: 配置文件路径
-
-    Returns:
-        Config 对象
-
-    Raises:
-        FileNotFoundError: 配置文件不存在
-        ValueError: 文件格式不支持或不合法
-    """
-    path = Path(config_path)
-    if not path.exists():
-        raise FileNotFoundError(f"配置文件不存在: {config_path}")
-
-    raw = path.read_text(encoding="utf-8")
-
-    if path.suffix in (".yaml", ".yml"):
-        import yaml
-
-        data = yaml.safe_load(raw)
-        if not isinstance(data, dict):
-            raise ValueError(f"YAML 配置文件格式错误: {config_path}")
-    elif path.suffix == ".json":
-        data = json.loads(raw)
-    else:
-        data = json.loads(raw)
-
-    return _from_dict(data)
-
-
-def _from_dict(data: dict[str, Any]) -> Config:
-    """从字典构建 Config 对象"""
-    # ServerConfig
-    server_data = data.get("server", {})
-    server = ServerConfig(
-        url=server_data.get("url", ""),
-        username=server_data.get("username", "admin"),
-        token=server_data.get("token", ""),
-    )
-
-    # 验证必填字段
-    _validate_config(server)
-
-    # BuildConfig
-    build_data = data.get("build", {})
-    build = BuildConfig(
-        mode=build_data.get("mode", "parallel"),
-        poll_interval=build_data.get("poll_interval", 10),
-        queue_timeout=build_data.get("queue_timeout", 30),
-        build_timeout=build_data.get("build_timeout", 3600),
-        curl_timeout=build_data.get("curl_timeout", 30),
-        log_dir=build_data.get("log_dir", "./jenkins_logs"),
-        log_retention_days=build_data.get("log_retention_days", 3),
-        max_parallel=build_data.get("max_parallel", 5),
-    )
-
-    # branch_field
-    branch_field = data.get("branch_field", "branch")
-
-    # Environments
-    environments = {}
-    for env_name, env_data in data.get("environments", {}).items():
-        env = _build_environment(env_name, env_data, branch_field)
-        environments[env_name] = env
-
-    return Config(
-        server=server,
-        build=build,
-        branch_field=branch_field,
-        environments=environments,
-    )
-
-
-def _validate_config(server: ServerConfig):
-    """
-    验证配置必填字段
-
-    Args:
-        server: 服务器配置对象
-
-    Raises:
-        ValueError: 必填字段为空时抛出
-    """
-    if not isinstance(server.url, str) or not server.url.strip():
-        raise ValueError(f"{VALIDATION_ERROR_PREFIX}server.url 不能为空")
-    if not isinstance(server.token, str) or not server.token.strip():
-        raise ValueError(f"{VALIDATION_ERROR_PREFIX}server.token 不能为空")
-
-
-def _build_environment(
-    env_name: str, env_data: dict[str, Any], global_branch_field: str
-) -> Environment:
-    """
-    构建 Environment 对象（含向后兼容）
-
-    兼容旧格式字段: default_branch, git_param
-    """
-    old_default_branch = env_data.get("default_branch")
-    old_git_param = env_data.get("git_param")
-    env_params = _parse_params_field(env_data.get("params", ""))
-
-    # 向后兼容：将旧字段合并到 params
-    if old_default_branch or old_git_param:
-        effective_field = env_data.get(
-            "branch_field", old_git_param or global_branch_field
-        )
-        if old_default_branch and effective_field not in env_params:
-            env_params = dict(env_params)
-            env_params[effective_field] = old_default_branch
-            logger.warning(
-                "环境 '%s' 使用了弃用的 'default_branch' 字段，"
-                "请迁移到 params.%s（参见 CHANGELOG.md）",
-                env_name,
-                effective_field,
-            )
-
-    env_branch_field = env_data.get("branch_field", "")
-
-    # 向后兼容：迁移 git_param → branch_field
-    if not env_branch_field and old_git_param:
-        env_branch_field = old_git_param
-
-    projects = []
-    for proj_data in env_data.get("projects", []):
-        project = _build_project(
-            proj_data, env_params, env_branch_field or global_branch_field, env_name
-        )
-        projects.append(project)
-
-    return Environment(
-        name=env_name,
-        description=env_data.get("description", ""),
-        branch_field=env_branch_field,
-        params=env_params,
-        projects=projects,
-    )
-
-
-def _build_project(
-    proj_data: dict[str, Any],
-    env_params: dict[str, Any],
-    effective_branch_field: str,
-    env_name: str,
-) -> Project:
-    """
-    构建 Project 对象（含向后兼容）
-
-    兼容旧格式字段: branch, git_param
-    """
-    proj_params = _parse_params_field(proj_data.get("params", ""))
-
-    old_branch = proj_data.get("branch")
-    old_git_param = proj_data.get("git_param")
-
-    if old_branch or old_git_param:
-        param_key = old_git_param or effective_branch_field
-        proj_params = dict(proj_params)
-        if old_branch and param_key not in proj_params:
-            proj_params[param_key] = old_branch
-            # 如果项目使用自定义 git_param（不同于环境的 branch_field），
-            # 同时将分支值设置到环境级别的 branch_field 中，
-            # 确保 job.branch 派生正确
-            if old_git_param and old_git_param != effective_branch_field:
-                proj_params[effective_branch_field] = old_branch
-            logger.warning(
-                "项目 '%s'（环境 '%s'）使用了弃用的 'branch' 字段，"
-                "请迁移到 params.%s（参见 CHANGELOG.md）",
-                proj_data["name"],
-                env_name,
-                param_key,
-            )
-
-    return Project(
-        name=proj_data["name"],
-        path=proj_data.get("path", proj_data["name"]),
-        params=proj_params,
-    )
-
-
-def _parse_params_field(params_value: object) -> dict[str, Any]:
-    """
-    解析参数字段，支持新旧两种格式
-
-    新格式: {"BRANCH": "develop", "skip_tests": "false"}
-    旧格式: "BRANCH=develop&skip_tests=false"
-    """
-    if isinstance(params_value, dict):
-        return {str(k): v for k, v in params_value.items()}
-    if isinstance(params_value, str):
-        if not params_value.strip():
-            return {}
-        result: dict[str, Any] = {}
-        for pair in params_value.split("&"):
-            if "=" in pair:
-                k, v = pair.split("=", 1)
-                result[k.strip()] = v.strip()
-        return result
-    return {}
-
-
-# ============================================================================
-# 保存和模板
-# ============================================================================
-
-
-def save_config(config: Config, path: str):
+def save_config(config: Config, path: str) -> None:
     """
     将配置写入 YAML 文件
 
@@ -342,7 +124,6 @@ def save_config(config: Config, path: str):
 
 
 def config_to_dict(config: Config) -> dict[str, Any]:
-
     """将 Config 对象序列化为字典"""
     environments = {}
     for env_name, env in config.environments.items():
@@ -360,21 +141,8 @@ def config_to_dict(config: Config) -> dict[str, Any]:
         environments[env_name] = env_dict
 
     result = {
-        "server": {
-            "url": config.server.url,
-            "username": config.server.username,
-            "token": config.server.token,
-        },
-        "build": {
-            "mode": config.build.mode,
-            "poll_interval": config.build.poll_interval,
-            "queue_timeout": config.build.queue_timeout,
-            "build_timeout": config.build.build_timeout,
-            "curl_timeout": config.build.curl_timeout,
-            "log_dir": config.build.log_dir,
-            "log_retention_days": config.build.log_retention_days,
-            "max_parallel": config.build.max_parallel,
-        },
+        "server": asdict(config.server),
+        "build": asdict(config.build),
     }
 
     if config.branch_field != "branch":
@@ -414,22 +182,13 @@ def generate_template() -> dict[str, Any]:
         >>> generate_template()["server"]["url"] == PLACEHOLDER_VALUES["server.url"]
         True
     """
+    server = ServerConfig(
+        url=PLACEHOLDER_VALUES["server.url"],
+        token=PLACEHOLDER_VALUES["server.token"],
+    )
     return {
-        "server": {
-            "url": PLACEHOLDER_VALUES["server.url"],
-            "username": "admin",
-            "token": PLACEHOLDER_VALUES["server.token"],
-        },
-        "build": {
-            "mode": "parallel",
-            "poll_interval": 10,
-            "queue_timeout": 30,
-            "build_timeout": 3600,
-            "curl_timeout": 30,
-            "log_dir": "./jenkins_logs",
-            "log_retention_days": 3,
-            "max_parallel": 5,
-        },
+        "server": asdict(server),
+        "build": asdict(BuildConfig()),
         "branch_field": "branch",
         "environments": {
             "dev": {

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from jenkins_config.config_io import VALIDATION_ERROR_PREFIX
+from jenkins_config.config_load import VALIDATION_ERROR_PREFIX
 
 if TYPE_CHECKING:
     from jenkins_config.mcp.utils import ConfigInspection
@@ -232,7 +232,7 @@ def classify(exc: BaseException, phase: str) -> str:
     if isinstance(exc, FileNotFoundError):
         return ErrorCode.CONFIG_NOT_FOUND
     if isinstance(exc, KeyError):
-        # 项目缺 name 键（config_io._build_project）
+        # 项目缺 name 键（config_load._build_project）
         return ErrorCode.CONFIG_INCOMPLETE
     if isinstance(exc, ValueError):
         if str(exc).startswith(VALIDATION_ERROR_PREFIX):
