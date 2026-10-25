@@ -266,6 +266,7 @@ def generate_report(results: list[BuildResult], log_dir: str):
 
     print_sep("-")
     print(f"日志目录: {log_dir}")
+    print(f"结束时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print_sep("=")
 
     if failure > 0:

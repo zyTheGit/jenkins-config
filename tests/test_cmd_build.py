@@ -8,6 +8,7 @@
 注意：run_build / run_rebuild_last 相关测试在 test_cmd_build_run.py
 """
 
+import re
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -119,6 +120,7 @@ def test_generate_report_all_success(capsys):
     assert "失败: 0 个" in captured.out
     assert "[OK] dev_app" in captured.out
     assert "[OK] dev_web" in captured.out
+    assert re.search(r"结束时间: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", captured.out)
 
 
 def test_generate_report_mixed(capsys):
