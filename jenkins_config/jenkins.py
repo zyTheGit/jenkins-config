@@ -23,7 +23,7 @@ from enum import Enum
 from dataclasses import dataclass
 from types import TracebackType
 from typing import TYPE_CHECKING, Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import requests
 
@@ -786,7 +786,8 @@ class JenkinsClient:
             True 如果 Jenkins 可达
 
         Raises:
-            ConnectionError: 如果 Jenkins 不可达
+            ConnectionError: 如果 Jenkins 不可达；代理故障单独成文，
+                因为此时服务器往往可达，报"无法连接"会掩盖真正的元凶
         """
         try:
             resp = self.session.get(
@@ -800,6 +801,17 @@ class JenkinsClient:
         except requests.exceptions.RetryError as e:
             raise ConnectionError(
                 f"Jenkins 服务器多次重试后仍不可达: {self.base_url}"
+            ) from e
+        # ProxyError 是 ConnectionError 的子类，必须先于下面的分支捕获
+        except requests.exceptions.ProxyError as e:
+            target = urlsplit(self.base_url)
+            proxy = requests.utils.get_environ_proxies(self.base_url).get(
+                target.scheme, "未知"
+            )
+            raise ConnectionError(
+                f"代理 {proxy} 不可用，无法访问 Jenkins: {self.base_url}；"
+                "请启动该代理，或把 Jenkins 主机加入 no_proxy"
+                f"（如 export no_proxy=$no_proxy,{target.hostname}）后重试"
             ) from e
         except requests.exceptions.ConnectionError as e:
             raise ConnectionError(

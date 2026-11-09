@@ -480,6 +480,8 @@ npx 用户装完之后没有任何配置文件，从零到 `list_environments` �
 
 **返回值：** `dict` — 包含 `reachable`（是否可达）和 `url`（服务器地址）；失败时在这两个键之外合并统一失败载荷（`error_code` / `error` / `config_path` / `next_steps` / `docs`）。连接失败（`ConnectionError`）归为 `unknown_error`，`next_steps` 指向"调 `doctor` 复查配置 / 确认地址可达 / 确认 token 未过期"——网络失败不会被误判成配置权限问题。
 
+代理故障（`ProxyError`，是 `requests.ConnectionError` 的子类）在 `error` 文案里单独成文：报出实际生效的代理地址，并给出按 `server.url` 主机生成的 `no_proxy` 命令（去端口，域名与 IPv4 均适用）。此时 Jenkins 本身往往可达，笼统报"无法连接到 Jenkins 服务器"会把排查方向带偏。`error_code` 仍为 `unknown_error`。
+
 ---
 
 #### `show_history`
@@ -943,6 +945,7 @@ uv run mcp dev jenkins_config/mcp/server.py
 | 加了 `env` 后 server 起不来 | 客户端把自定义 `env` 当替换而非合并，`PATH` 丢了 | 在 `env` 里一并显式给出 `PATH` |
 | 启动即退出并提示缺少依赖 | 未安装 `mcp` extra | 执行 `uv sync --extra mcp` 或 `pip install "jenkins-config[mcp]"` |
 | 连接失败 | Jenkins 服务器不可达 | 检查网络和 `jenkins-config.yaml` 中的服务器地址 |
+| 报"代理 xxx 不可用" | 请求被交给代理，而代理没启动或不许访问内网（Jenkins 本身通常可达） | 按报错给出的命令把 Jenkins 主机加入 `no_proxy`——MCP 场景要写进 server 配置的 `env`（见 §3.3），shell 里 `export` 不生效；或启动/关闭该代理 |
 | 配置文件不存在 | 未创建配置文件 | 调 `init_config` 生成模板（见 §3.9），或运行 `jenkins-build --init` |
 | 不确定读的是哪份配置 | 探测链上有多份配置文件 | 调 `where_config` 看 `config_path` 与 `source`；要固定一份用 `JENKINS_MCP_CONFIG` |
 | 说不清哪一步坏了 | 配置 / 权限 / 日志任一层出问题 | 调 `doctor`（默认不发网络请求），按 `checks` 里第一个 `error` 项的 `hint` 处理 |

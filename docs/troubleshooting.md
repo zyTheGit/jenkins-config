@@ -40,6 +40,16 @@ Jenkins 返回 400（Bad Request）通常是因为参数值不合法：
 - API Token 是否有效
 - 网络是否连通
 
+**报"代理 xxx 不可用"时，服务器通常是好的**：requests 默认 `trust_env=True`，会继承 shell 的 `http_proxy` / `https_proxy`；Windows 上即使这两个变量为空，也会回退读取系统代理（注册表 `ProxyServer`）。`no_proxy` 不覆盖 Jenkins 主机时，发往内网的请求会被交给代理，代理没启动或不允许访问内网就直接失败。
+
+报错里的 `export no_proxy=$no_proxy,<主机>` 是按配置的 `server.url` 生成的（已去掉端口），直接复制执行即可。要让整个内网都直连，再按网段写（requests 支持 CIDR）：
+
+```bash
+export no_proxy=$no_proxy,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12
+```
+
+排查顺序：先 `curl <url>/login` 确认服务器本身可达（返回 200 即服务端正常），再判断是代理还是网络问题。
+
 ## npx 启动器相关
 
 先用自检模式确认解析到了什么命令（只打印，不真正启动）：
