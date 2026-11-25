@@ -97,3 +97,38 @@ One owner per seam; callers invoke it and never restate its rules.
 - Package entry points live in `pyproject.toml`; PyInstaller entry is `entry_point_mcp.py`. The npm launcher (`npm/`) resolves `JENKINS_MCP_BINARY` → `JENKINS_MCP_PYTHON` → cached binary → sha256-verified GitHub download → PATH; logs go to stderr. Keep the Windows `COMSPEC` / `taskkill` invariants (CVE-2024-27980, DEP0190) documented at the top of the launcher.
 - Releases are tag-driven: `.github/workflows/build.yml` on `v*` builds binaries plus `checksums.txt` and publishes npm with the version from the tag. Never hand-edit the npm version; `NPM_TOKEN` is required; prereleases use the `next` tag.
 - Behavior changes update `docs/`; new domain terms go in `GLOSSARY.md`. Client setup docs: `docs/mcp/README.md` §3. Issues via `gh`; labels live in `docs/agents/`.
+<!-- BEGIN AGENTHUB -->
+# AgentHub Managed Rules (jenkins-config)
+
+- Hub: `personal`
+- Profile: `personal-dev`
+- Skills: `grill-me`, `to-spec`, `to-tickets`, `domain-modeling`, `prototype`, `implement-spec`, `tdd`, `codebase-design`, `setup-ts-deep-modules`, `module-splitter`, `diagnosing-bugs`, `code-review`, `pr`, `research`, `handoff`
+
+## [profile] 10-personal-engineering.md (personal:personal-base)
+
+# 10 — 个人工程化与协作原则
+
+本规范仅约束个人自研项目（不自动套用于公司历史存量仓）。
+
+## 1. 单文件体积极限与渐进式拆分
+- **行数红线**：个人项目源码、规范文档与规则文件默认单文件严格控制在 **≤ 500 行**（若项目 Overlay 约定更严上限如 400/600 行，以 Overlay 为准）。
+- **提前模块化解耦**：逻辑预计超过 400 行时先规划拆分再实现，通过组合模式提取子模块并保留统一导出面，不写完再补救。
+- **渐进式披露与上下文经济性**：高层索引文档仅承载入口与核心契约，不向上下文倾倒全量实现细节。
+
+## 2. 确定性逻辑交付脚本
+- **机械归脚本，语义归 LLM**：格式校验、哈希比对、代码生成、行号/行数统计等确定性工作优先编写独立脚本（Python / Node.js）自动化执行，拒绝人工脑补计算。
+
+## 3. 多 Agent 并行协作约束
+- **互不重叠的文件所有权**：并行委派多个子代理时，必须为每个 Agent 划定显式、互不重叠的文件所有权清单，严禁两个 Agent 同时修改同一个文件。
+
+## [overlay] overlay.md (personal:overlays/jenkins-config)
+
+# jenkins-config 项目事实覆盖
+
+- 项目定位：Python 实现的 Jenkins 自动构建 CLI 与 MCP Server，兼具命令行与 Agent 集成形态。
+- 核心架构约束：
+  - 单点权威（Seam）：路径锚定统一由 `paths.py` 处理；构建流集中在 `build_flow.py`；配置参数模板收敛于 `config.py`。
+  - stdio 纯净通道：运行在 MCP Server 模式时，stdout 严格保留给 JSON-RPC 协议通信，所有调试信息与错误日志必须输出至 stderr 或独立日志文件。
+  - 依赖容错：`mcp` extra 采用按需延迟导入机制，在未安装 `mcp` extra 的运行环境下自动降级为纯 CLI 模式。
+  - 失败契约：MCP 接口异常统一输出标准五字段响应（`error_code`, `error`, `config_path`, `next_steps`, `docs`）。
+<!-- END AGENTHUB -->
